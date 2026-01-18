@@ -21,14 +21,30 @@ struct LogEvent{
 QueueHandle_t sampleQueue;
 QueueHandle_t logQueue;
 
-volatile uint32_t dropped_logs = 0;
+uint32_t dropped_logs = 0;
 volatile int producer_stage = 0;
 static const char *TAG = "MAIN";
+static portMUX_TYPE dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
+
+
+static inline void inc_dropped_logs() {
+  portENTER_CRITICAL(&dropped_logs_mux);
+  dropped_logs++;
+  portEXIT_CRITICAL(&dropped_logs_mux);
+}
+
+static inline uint32_t get_dropped_logs() {
+  portENTER_CRITICAL(&dropped_logs_mux);
+  uint32_t v = dropped_logs;
+  portEXIT_CRITICAL(&dropped_logs_mux);
+  return v;
+}
 
 void health_task(void *pvParameters){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     while(1){
-        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", dropped_logs, producer_stage);
+        uint32_t v = get_dropped_logs();
+        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, producer_stage);
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -86,12 +102,12 @@ void producer_task(void *pvParameters){
         }
         producer_stage = 21;
         if(xQueueSend(logQueue, &ev, 0) != pdTRUE){
-            dropped_logs++;
+            inc_dropped_logs();
         }
         producer_stage = 22;
         count++;
         producer_stage = 30;
-        if (count == 20)
+        if (count == 50)
         {
             producer_stage = 31;
             while (1)
@@ -124,7 +140,7 @@ void consumer_task(void *pvParameters){
             ev.type = LogType::RECEIVED;
         }
         if(xQueueSend(logQueue, &ev, 0) != pdTRUE){
-            dropped_logs++;
+            inc_dropped_logs();
         }
         ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
