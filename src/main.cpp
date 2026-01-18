@@ -21,8 +21,18 @@ struct LogEvent{
 QueueHandle_t sampleQueue;
 QueueHandle_t logQueue;
 
+volatile uint32_t dropped_logs = 0;
 volatile int producer_stage = 0;
 static const char *TAG = "MAIN";
+
+void health_task(void *pvParameters){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+    while(1){
+        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", dropped_logs, producer_stage);
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
 
 void logger_task(void *pvParameters){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
@@ -75,7 +85,9 @@ void producer_task(void *pvParameters){
             ev.type = LogType::SENT;
         }
         producer_stage = 21;
-        xQueueSend(logQueue, &ev, 0);
+        if(xQueueSend(logQueue, &ev, 0) != pdTRUE){
+            dropped_logs++;
+        }
         producer_stage = 22;
         count++;
         producer_stage = 30;
@@ -111,9 +123,10 @@ void consumer_task(void *pvParameters){
             ev.timestamp_ms = s.timestamp_ms;     
             ev.type = LogType::RECEIVED;
         }
-        xQueueSend(logQueue, &ev, 0);
+        if(xQueueSend(logQueue, &ev, 0) != pdTRUE){
+            dropped_logs++;
+        }
         ESP_ERROR_CHECK(esp_task_wdt_reset());
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
@@ -134,6 +147,7 @@ extern "C" void app_main(void) {
         ESP_LOGE(TAG, "Failed to create logQueue");
         return;
     }
+    xTaskCreate(health_task, "health", 2048, NULL, 2, NULL);
     xTaskCreate(logger_task, "logger", 2048, NULL, 5, NULL);
     xTaskCreate(producer_task, "producer", 2048, NULL, 3, NULL); //runs the sending function
     xTaskCreate(consumer_task, "consumer", 2048, NULL, 6, NULL); //runs the sending function
