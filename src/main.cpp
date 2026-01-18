@@ -3,6 +3,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 
 struct Sample {
     int count;
@@ -23,6 +24,7 @@ QueueHandle_t logQueue;
 static const char *TAG = "MAIN";
 
 void logger_task(void *pvParameters){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
     LogEvent ev;
     while(1){
         if(xQueueReceive(logQueue, &ev, portMAX_DELAY) != pdTRUE){
@@ -45,11 +47,12 @@ void logger_task(void *pvParameters){
                     break;
         }  
         }
-        
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
 }
 
 void producer_task(void *pvParameters){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
     Sample s;
     int count = 0;
     while(1){
@@ -66,12 +69,23 @@ void producer_task(void *pvParameters){
         }
         xQueueSend(logQueue, &ev, 0);
         count++;
+        if (count == 20)
+        {
+            while (1)
+            {
+                //testing watchdog reboot
+            }
+            
+        }
+        
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(200)); //delays task, ms_to_ticks converts to ms
     }
     
 }
 
 void consumer_task(void *pvParameters){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
     Sample s;
     while(1){
         LogEvent ev;
@@ -86,10 +100,18 @@ void consumer_task(void *pvParameters){
             ev.type = LogType::RECEIVED;
         }
         xQueueSend(logQueue, &ev, 0);
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
 extern "C" void app_main(void) {
+    esp_task_wdt_config_t twdt_config =  {
+        .timeout_ms = 5000, //5 sec
+        .idle_core_mask = 0, //not watching idle tasks
+        .trigger_panic = true //reset on timeout
+    };
+    ESP_ERROR_CHECK(esp_task_wdt_init(&twdt_config));
     sampleQueue = xQueueCreate(5, sizeof(Sample)); //creates queue & and sets sizes
     if (sampleQueue == NULL){
         ESP_LOGE(TAG, "Failed to create sampleQueue");
