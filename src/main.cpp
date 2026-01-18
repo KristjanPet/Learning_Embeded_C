@@ -21,11 +21,13 @@ struct LogEvent{
 QueueHandle_t sampleQueue;
 QueueHandle_t logQueue;
 
+volatile int producer_stage = 0;
 static const char *TAG = "MAIN";
 
 void logger_task(void *pvParameters){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
     LogEvent ev;
+    int n = 0;
     while(1){
         if(xQueueReceive(logQueue, &ev, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("LOG", "Error receiving log");
@@ -45,7 +47,11 @@ void logger_task(void *pvParameters){
                     ESP_LOGE("LOG", "ERROR while sending sample");
                 default:
                     break;
-        }  
+            }  
+        }
+        n++;
+        if(n % 10 == 0){
+            ESP_LOGI("LOG", "producer stage: %d", producer_stage);
         }
         ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
@@ -61,16 +67,21 @@ void producer_task(void *pvParameters){
         s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
         ev.count = s.count;
         ev.timestamp_ms = s.timestamp_ms;
+        producer_stage = 1;
         if(xQueueSend(sampleQueue, &s, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
             ev.type = LogType::DROPPED;
         }
         else{
             ev.type = LogType::SENT;
         }
+        producer_stage = 21;
         xQueueSend(logQueue, &ev, 0);
+        producer_stage = 22;
         count++;
+        producer_stage = 30;
         if (count == 20)
         {
+            producer_stage = 31;
             while (1)
             {
                 //testing watchdog reboot
@@ -79,6 +90,7 @@ void producer_task(void *pvParameters){
         }
         
         ESP_ERROR_CHECK(esp_task_wdt_reset());
+        producer_stage = 3;
         vTaskDelay(pdMS_TO_TICKS(200)); //delays task, ms_to_ticks converts to ms
     }
     
@@ -109,7 +121,7 @@ extern "C" void app_main(void) {
     esp_task_wdt_config_t twdt_config =  {
         .timeout_ms = 5000, //5 sec
         .idle_core_mask = 0, //not watching idle tasks
-        .trigger_panic = true //reset on timeout
+        .trigger_panic = false //reset on timeout
     };
     ESP_ERROR_CHECK(esp_task_wdt_init(&twdt_config));
     sampleQueue = xQueueCreate(5, sizeof(Sample)); //creates queue & and sets sizes
