@@ -9,11 +9,12 @@ struct Sample {
     uint32_t timestamp_ms;
 };
 
-enum class LogType : uint8_t { SENT, DROPPED, RECEIVED };
+enum class LogType : uint8_t { SENT, DROPPED, RECEIVED, ERROR };
 
 struct LogEvent{
     LogType type;
-    Sample s;
+    int count;
+    uint32_t timestamp_ms;
 };
 
 QueueHandle_t sampleQueue;
@@ -24,21 +25,27 @@ static const char *TAG = "MAIN";
 void logger_task(void *pvParameters){
     LogEvent ev;
     while(1){
-        xQueueReceive(logQueue, &ev, portMAX_DELAY);
-        switch (ev.type)
-        {
-        case LogType::SENT:
-            ESP_LOGI("LOG", "SENT count= %d, t= %u", ev.s.count, ev.s.timestamp_ms);
-            break;
-        case LogType::RECEIVED:
-            ESP_LOGI("LOG", "RECEIVED count= %d, t= %u", ev.s.count, ev.s.timestamp_ms);
-            break;
-        case LogType::DROPPED:
-            ESP_LOGW("LOG", "DROPPED count= %d, t= %u", ev.s.count, ev.s.timestamp_ms);
-            break;
-        default:
-            break;
+        if(xQueueReceive(logQueue, &ev, portMAX_DELAY) != pdTRUE){
+            ESP_LOGE("LOG", "Error receiving log");
+        }else{
+            switch (ev.type)
+            {
+                case LogType::SENT:
+                    ESP_LOGI("LOG", "SENT count= %d, t= %u", ev.count, ev.timestamp_ms);
+                    break;
+                case LogType::RECEIVED:
+                    ESP_LOGI("LOG", "RECEIVED count= %d, t= %u", ev.count, ev.timestamp_ms);
+                    break;
+                case LogType::DROPPED:
+                    ESP_LOGW("LOG", "DROPPED count= %d, t= %u", ev.count, ev.timestamp_ms);
+                    break;
+                case LogType::ERROR:
+                    ESP_LOGE("LOG", "ERROR while sending sample");
+                default:
+                    break;
         }  
+        }
+        
     }
 }
 
@@ -49,7 +56,8 @@ void producer_task(void *pvParameters){
         LogEvent ev;
         s.count = count;
         s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        ev.s = s;
+        ev.count = s.count;
+        ev.timestamp_ms = s.timestamp_ms;
         if(xQueueSend(sampleQueue, &s, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
             ev.type = LogType::DROPPED;
         }
@@ -67,9 +75,16 @@ void consumer_task(void *pvParameters){
     Sample s;
     while(1){
         LogEvent ev;
-        xQueueReceive(sampleQueue, &s, portMAX_DELAY);
-        ev.s = s;
-        ev.type = LogType::RECEIVED;
+        if(xQueueReceive(sampleQueue, &s, portMAX_DELAY) != pdTRUE){ 
+            ev.count = 0;
+            ev.timestamp_ms = 0;    
+            ev.type = LogType::ERROR;
+        }
+        else{
+            ev.count = s.count;
+            ev.timestamp_ms = s.timestamp_ms;     
+            ev.type = LogType::RECEIVED;
+        }
         xQueueSend(logQueue, &ev, 0);
     }
 }
