@@ -21,11 +21,14 @@ struct LogEvent{
 QueueHandle_t sampleQueue;
 QueueHandle_t logQueue;
 
+void producer_task(void *pvParameters);
+
 uint32_t dropped_logs = 0;
 volatile int producer_stage = 0;
 
 static const char *TAG = "MAIN";
 static portMUX_TYPE dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
+static TaskHandle_t producerHandle = nullptr;
 
 
 static inline void inc_dropped_logs() {
@@ -56,8 +59,13 @@ void health_task(void *pvParameters){
         prev_stage = producer_stage;
         if (stuck_seconds >= 6) //reboot if stuck
         {
-            ESP_LOGE("HEALTH", "ESP stuck, rebooting now");
-            esp_restart();
+            ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
+            if(producerHandle){
+                vTaskDelete(producerHandle);
+                producerHandle = nullptr;
+            }
+            xTaskCreate(producer_task, "producer", 2048, NULL, 3, &producerHandle);
+            stuck_seconds = 0;
         }
         
         ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, producer_stage);
@@ -134,7 +142,7 @@ void producer_task(void *pvParameters){
         }
         
         ESP_ERROR_CHECK(esp_task_wdt_reset());
-        producer_stage = 3;
+        producer_stage = 31;
         vTaskDelay(pdMS_TO_TICKS(200)); //delays task, ms_to_ticks converts to ms
     }
     
@@ -181,6 +189,6 @@ extern "C" void app_main(void) {
     }
     xTaskCreate(health_task, "health", 2048, NULL, 2, NULL);
     xTaskCreate(logger_task, "logger", 2048, NULL, 5, NULL);
-    xTaskCreate(producer_task, "producer", 2048, NULL, 3, NULL); //runs the sending function
-    xTaskCreate(consumer_task, "consumer", 2048, NULL, 6, NULL); //runs the sending function
+    xTaskCreate(producer_task, "producer", 2048, NULL, 3, &producerHandle); //runs the sending task
+    xTaskCreate(consumer_task, "consumer", 2048, NULL, 6, NULL); //runs the sending task
 }
