@@ -23,6 +23,7 @@ QueueHandle_t logQueue;
 
 uint32_t dropped_logs = 0;
 volatile int producer_stage = 0;
+
 static const char *TAG = "MAIN";
 static portMUX_TYPE dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -42,8 +43,23 @@ static inline uint32_t get_dropped_logs() {
 
 void health_task(void *pvParameters){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+    int prev_stage = 0;
+    uint8_t stuck_seconds = 0;
     while(1){
         uint32_t v = get_dropped_logs();
+        if (producer_stage == prev_stage){ //check if stuck
+            stuck_seconds++;
+        }
+        else {
+            stuck_seconds = 0;
+        }
+        prev_stage = producer_stage;
+        if (stuck_seconds >= 6) //reboot if stuck
+        {
+            ESP_LOGE("HEALTH", "ESP stuck, rebooting now");
+            esp_restart();
+        }
+        
         ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, producer_stage);
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
