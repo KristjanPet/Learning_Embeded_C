@@ -24,7 +24,8 @@ QueueHandle_t logQueue;
 void producer_task(void *pvParameters);
 
 uint32_t dropped_logs = 0;
-volatile int producer_stage = 0;
+volatile int producer_stage = 0; //for debugging
+volatile uint32_t producer_heartbeat = 0;
 
 static const char *TAG = "MAIN";
 static portMUX_TYPE dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -46,21 +47,22 @@ static inline uint32_t get_dropped_logs() {
 
 void health_task(void *pvParameters){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
-    int prev_stage = 0;
+    int prev_hb = 0;
     uint8_t stuck_seconds = 0;
     while(1){
         uint32_t v = get_dropped_logs();
-        if (producer_stage == prev_stage){ //check if stuck
+        if (producer_heartbeat == prev_hb){ //check if stuck
             stuck_seconds++;
         }
         else {
             stuck_seconds = 0;
         }
-        prev_stage = producer_stage;
+        prev_hb = producer_heartbeat;
         if (stuck_seconds >= 6) //reboot if stuck
         {
             ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
             if(producerHandle){
+                esp_task_wdt_delete(producerHandle);
                 vTaskDelete(producerHandle);
                 producerHandle = nullptr;
             }
@@ -142,7 +144,8 @@ void producer_task(void *pvParameters){
         }
         
         ESP_ERROR_CHECK(esp_task_wdt_reset());
-        producer_stage = 31;
+        producer_stage = 3;
+        producer_heartbeat++;
         vTaskDelay(pdMS_TO_TICKS(200)); //delays task, ms_to_ticks converts to ms
     }
     
