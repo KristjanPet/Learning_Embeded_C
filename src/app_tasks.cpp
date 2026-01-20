@@ -1,0 +1,155 @@
+#include "app_tasks.h"
+
+void start_app_tasks(AppContext *ctx){
+    (void)ctx;
+
+    xTaskCreate(health_task, "health", 2048, ctx, 2, NULL);
+    xTaskCreate(logger_task, "logger", 2048, ctx, 5, NULL);
+    xTaskCreate(producer_task, "producer", 2048, ctx, 3, &ctx->producerHandle); //runs the sending task
+    xTaskCreate(consumer_task, "consumer", 2048, ctx, 6, NULL); //runs the sending task
+}
+
+static inline void inc_dropped_logs(AppContext *ctx) {
+    portENTER_CRITICAL(&ctx->dropped_logs_mux);
+    ctx->dropped_logs++;
+    portEXIT_CRITICAL(&ctx->dropped_logs_mux);
+}
+
+static inline uint32_t get_dropped_logs(AppContext *ctx) {
+  portENTER_CRITICAL(&ctx->dropped_logs_mux);
+  uint32_t v = ctx->dropped_logs;
+  portEXIT_CRITICAL(&ctx->dropped_logs_mux);
+  return v;
+}
+
+void health_task(void *pvParameters){
+    auto *ctx = (AppContext*)pvParameters;
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+    int prev_hb = 0;
+    uint8_t stuck_seconds = 0;
+    while(1){
+        uint32_t v = get_dropped_logs(ctx);
+        if (ctx->producer_heartbeat == prev_hb){ //check if stuck
+            stuck_seconds++;
+        }
+        else {
+            stuck_seconds = 0;
+        }
+        prev_hb = ctx->producer_heartbeat;
+        if (stuck_seconds >= 6) //reboot if stuck
+        {
+            ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
+            if(ctx->producerHandle){
+                esp_task_wdt_delete(ctx->producerHandle);
+                vTaskDelete(ctx->producerHandle);
+                ctx->producerHandle = nullptr;
+            }
+            xTaskCreate(producer_task, "producer", 2048, NULL, 3, &ctx->producerHandle);
+            stuck_seconds = 0;
+        }
+        
+        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx->producer_stage);
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
+void logger_task(void *pvParameters){
+    auto *ctx = (AppContext*)pvParameters;
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+    LogEvent ev;
+    int n = 0;
+    while(1){
+        if(xQueueReceive(ctx->logQueue, &ev, portMAX_DELAY) != pdTRUE){
+            ESP_LOGE("LOG", "Error receiving log");
+        }else{
+            switch (ev.type)
+            {
+                case LogType::SENT:
+                    ESP_LOGI("LOG", "SENT count= %d, t= %u", ev.count, ev.timestamp_ms);
+                    break;
+                case LogType::RECEIVED:
+                    ESP_LOGI("LOG", "RECEIVED count= %d, t= %u", ev.count, ev.timestamp_ms);
+                    break;
+                case LogType::DROPPED:
+                    ESP_LOGW("LOG", "DROPPED count= %d, t= %u", ev.count, ev.timestamp_ms);
+                    break;
+                case LogType::ERROR:
+                    ESP_LOGE("LOG", "ERROR while sending sample");
+                default:
+                    break;
+            }  
+        }
+        n++;
+        if(n % 10 == 0){
+            ESP_LOGI("LOG", "producer stage: %d", ctx->producer_stage);
+        }
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+    }
+}
+
+void producer_task(void *pvParameters){
+    auto *ctx = (AppContext*)pvParameters;
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+    Sample s;
+    int count = 0;
+    while(1){
+        LogEvent ev;
+        s.count = count;
+        s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        ev.count = s.count;
+        ev.timestamp_ms = s.timestamp_ms;
+        ctx->producer_stage = 1;
+        if(xQueueSend(ctx->sampleQueue, &s, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
+            ev.type = LogType::DROPPED;
+        }
+        else{
+            ev.type = LogType::SENT;
+        }
+        ctx->producer_stage = 21;
+        if(xQueueSend(ctx->logQueue, &ev, 0) != pdTRUE){
+            inc_dropped_logs(ctx);
+        }
+        ctx->producer_stage = 22;
+        count++;
+        ctx->producer_stage = 30;
+        // if (count == 50)
+        // {
+        //     ctx->producer_stage = 31;
+        //     while (1)
+        //     {
+        //         //testing watchdog reboot
+        //     }
+            
+        // }
+        
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        ctx->producer_stage = 3;
+        ctx->producer_heartbeat++;
+        vTaskDelay(pdMS_TO_TICKS(200)); //delays task, ms_to_ticks converts to ms
+    }
+    
+}
+
+void consumer_task(void *pvParameters){
+    auto *ctx = (AppContext*)pvParameters;
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+    Sample s;
+    while(1){
+        LogEvent ev;
+        if(xQueueReceive(ctx->sampleQueue, &s, portMAX_DELAY) != pdTRUE){ 
+            ev.count = 0;
+            ev.timestamp_ms = 0;    
+            ev.type = LogType::ERROR;
+        }
+        else{
+            ev.count = s.count;
+            ev.timestamp_ms = s.timestamp_ms;     
+            ev.type = LogType::RECEIVED;
+        }
+        if(xQueueSend(ctx->logQueue, &ev, 0) != pdTRUE){
+            inc_dropped_logs(ctx);
+        }
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+    }
+}
