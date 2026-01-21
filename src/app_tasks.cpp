@@ -19,6 +19,13 @@ bool app_init_and_start(AppContext *ctx){
         return false;
     }
 
+    ctx->settingsMutex = xSemaphoreCreateMutex();
+    if (ctx->settingsMutex == NULL){
+        ESP_LOGE("INIT", "Failed to create settings Mutex");
+        return false;
+    }
+    ctx->settings.producer_period_ms = 200;
+
     xTaskCreate(health_task, "health", 2048, ctx, 2, NULL);
     if (xTaskCreate(logger_task, "logger", 2048, ctx, 5, NULL) == pdFAIL){ ESP_LOGE("INIT", "logger task creation failed"); return false; }
     xTaskCreate(producer_task, "producer", 2048, ctx, 3, &ctx->producerHandle); //runs the sending task
@@ -44,6 +51,9 @@ void health_task(void *pvParameters){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     int prev_hb = 0;
     uint8_t stuck_seconds = 0;
+
+    int toggleSendPeriod = 0;
+
     while(1){
         uint32_t v = get_dropped_logs(ctx);
         if (ctx->producer_heartbeat == prev_hb){ //check if stuck
@@ -67,6 +77,16 @@ void health_task(void *pvParameters){
         
         ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx->producer_stage);
         ESP_ERROR_CHECK(esp_task_wdt_reset());
+
+        //toggle send period for mutex
+        if (toggleSendPeriod >= 5){
+            xSemaphoreTake(ctx->settingsMutex, portMAX_DELAY);
+            ctx->settings.producer_period_ms = (ctx->settings.producer_period_ms == 200) ? 1000 : 200;
+            xSemaphoreGive(ctx->settingsMutex);
+            toggleSendPeriod = 0;
+        }
+        toggleSendPeriod++;
+
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -143,7 +163,12 @@ void producer_task(void *pvParameters){
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         ctx->producer_stage = 3;
         ctx->producer_heartbeat++;
-        vTaskDelay(pdMS_TO_TICKS(200)); //delays task, ms_to_ticks converts to ms
+
+        xSemaphoreTake(ctx->settingsMutex, portMAX_DELAY);
+        auto p = ctx->settings.producer_period_ms;
+        xSemaphoreGive(ctx->settingsMutex);
+
+        vTaskDelay(pdMS_TO_TICKS(p)); //delays task, ms_to_ticks converts to ms
     }
     
 }

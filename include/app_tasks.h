@@ -2,11 +2,16 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "app_types.h"
 #include "freertos/portmacro.h"   // for portMUX_TYPE
 #include "esp_task_wdt.h"
+
+struct Settings {
+    uint32_t producer_period_ms;
+};
 
 struct AppContext{
     QueueHandle_t sampleQueue;
@@ -22,6 +27,10 @@ struct AppContext{
     // Dropped logs counter + lock
     portMUX_TYPE dropped_logs_mux;
     uint32_t dropped_logs;
+
+    //Mutex
+    SemaphoreHandle_t settingsMutex;
+    Settings settings;
 };
 
 bool app_init_and_start(AppContext *ctx);
