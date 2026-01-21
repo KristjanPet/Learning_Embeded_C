@@ -1,12 +1,29 @@
 #include "app_tasks.h"
 
-void start_app_tasks(AppContext *ctx){
-    (void)ctx;
+bool app_init_and_start(AppContext *ctx){
+
+    ctx->producerHandle = nullptr;
+    ctx->producer_stage = 0;
+    ctx->producer_heartbeat = 0;
+    ctx->dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
+    ctx->dropped_logs = 0;
+
+    ctx->sampleQueue = xQueueCreate(5, sizeof(Sample)); //creates queue & and sets sizes
+    if (ctx->sampleQueue == NULL){
+        ESP_LOGE("INIT", "Failed to create sampleQueue");
+        return false;
+    }
+    ctx->logQueue = xQueueCreate(10, sizeof(LogEvent));
+    if (ctx->logQueue == NULL){
+        ESP_LOGE("INIT", "Failed to create logQueue");
+        return false;
+    }
 
     xTaskCreate(health_task, "health", 2048, ctx, 2, NULL);
-    xTaskCreate(logger_task, "logger", 2048, ctx, 5, NULL);
+    if (xTaskCreate(logger_task, "logger", 2048, ctx, 5, NULL) == pdFAIL){ ESP_LOGE("INIT", "logger task creation failed"); return false; }
     xTaskCreate(producer_task, "producer", 2048, ctx, 3, &ctx->producerHandle); //runs the sending task
     xTaskCreate(consumer_task, "consumer", 2048, ctx, 6, NULL); //runs the sending task
+    return true;
 }
 
 static inline void inc_dropped_logs(AppContext *ctx) {

@@ -24,7 +24,7 @@ struct AppContext{
     uint32_t dropped_logs;
 };
 
-void start_app_tasks(AppContext *ctx);
+bool app_init_and_start(AppContext *ctx);
 
 static inline void inc_dropped_logs(AppContext *ctx);
 static inline uint32_t get_dropped_logs(AppContext *ctx);
