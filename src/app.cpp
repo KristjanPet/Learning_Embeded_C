@@ -1,6 +1,4 @@
 #include "app.h"
-#include "esp_log.h"
-#include "freertos/task.h"
 
 static const char *TAG = "APP";
 

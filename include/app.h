@@ -1,5 +1,11 @@
 #pragma once
-#include "app_tasks.h"
+#include "freertos/FreeRTOS.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "freertos/portmacro.h"   // for portMUX_TYPE
+#include "esp_task_wdt.h"
+#include "app_context.h"
+#include "app_types.h"
 
 class App{
 public:
