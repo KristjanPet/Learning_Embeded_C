@@ -136,32 +136,19 @@ void producer_task(void *pvParameters){
         s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
         ev.count = s.count;
         ev.timestamp_ms = s.timestamp_ms;
-        ctx->producer_stage = 1;
+
         if(xQueueSend(ctx->sampleQueue, &s, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
             ev.type = LogType::DROPPED;
         }
         else{
             ev.type = LogType::SENT;
         }
-        ctx->producer_stage = 21;
         if(xQueueSend(ctx->logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs(ctx);
         }
-        ctx->producer_stage = 22;
         count++;
-        ctx->producer_stage = 30;
-        // if (count == 50)
-        // {
-        //     ctx->producer_stage = 31;
-        //     while (1)
-        //     {
-        //         //testing watchdog reboot
-        //     }
-            
-        // }
         
         ESP_ERROR_CHECK(esp_task_wdt_reset());
-        ctx->producer_stage = 3;
         ctx->producer_heartbeat++;
 
         xSemaphoreTake(ctx->settingsMutex, portMAX_DELAY);

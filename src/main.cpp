@@ -22,6 +22,4 @@ extern "C" void app_main(void) {
     static App app;
     app.start();
 
-    static App secondApp;
-    app.start();
 }
