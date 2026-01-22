@@ -86,7 +86,7 @@ void App::producer(){
             ev.type = LogType::SENT;
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
-            inc_dropped_logs(&ctx_);
+            inc_dropped_logs();
         }
 
         ctx_.producer_heartbeat++;
@@ -114,13 +114,20 @@ void App::consumer(){
             ev.type = LogType::RECEIVED;
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
-            inc_dropped_logs(&ctx_);
+            inc_dropped_logs();
         }
     }
 }
 
-void App::inc_dropped_logs(AppContext *ctx_){
-    portENTER_CRITICAL(&ctx_->dropped_logs_mux);
-    ctx_->dropped_logs++;
-    portEXIT_CRITICAL(&ctx_->dropped_logs_mux);
+void App::inc_dropped_logs(){
+    portENTER_CRITICAL(&ctx_.dropped_logs_mux);
+    ctx_.dropped_logs++;
+    portEXIT_CRITICAL(&ctx_.dropped_logs_mux);
+}
+
+uint32_t App::get_dropped_logs() {
+    portENTER_CRITICAL(&ctx_.dropped_logs_mux);
+    uint32_t v = ctx_.dropped_logs;
+    portEXIT_CRITICAL(&ctx_.dropped_logs_mux);
+    return v;
 }

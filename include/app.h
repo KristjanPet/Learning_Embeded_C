@@ -21,8 +21,8 @@ private:
     void logger();
     // void health();
 
-    static inline void inc_dropped_logs(AppContext ctx_);
-    static inline uint32_t get_dropped_logs();
+    void inc_dropped_logs();
+    uint32_t get_dropped_logs();
 
     AppContext ctx_{};
 };
