@@ -1,9 +1,10 @@
 #pragma once
 #include <cstdint>
+#include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
-#include "freertos/portmacro.h"
+#include "freertos/portmacro.h" // for portMUX_TYPE
 
 struct Settings {
     uint32_t producer_period_ms;

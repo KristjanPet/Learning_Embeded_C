@@ -11,6 +11,11 @@ bool App::start(){
     ctx_.sampleQueue = xQueueCreate(5, sizeof(Sample));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
 
+    if(ctx_.sampleQueue == nullptr || ctx_.logQueue == nullptr){
+        ESP_LOGE(TAG, "Failed to create Queue");
+        return false;
+    }
+
     if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create producer task");
         return false;
@@ -18,6 +23,11 @@ bool App::start(){
 
     if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, NULL) != pdPASS){
         ESP_LOGE(TAG, "Failed to create logger task");
+        return false;
+    }
+
+    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, NULL) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create consumer task");
         return false;
     }
 
@@ -68,13 +78,49 @@ void App::producer(){
         s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
         ev.count = s.count;
         ev.timestamp_ms = s.timestamp_ms;
-        ev.type = LogType::SENT;
 
+        if(xQueueSend(ctx_.sampleQueue, &s, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
+            ev.type = LogType::DROPPED;
+        }
+        else{
+            ev.type = LogType::SENT;
+        }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
-            ESP_LOGE("PRODUCER", "Failed to send to Log");
+            inc_dropped_logs(&ctx_);
         }
 
         ctx_.producer_heartbeat++;
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+}
+
+void App::consumer_trampoline(void *pv){
+    auto *self = static_cast<App*>(pv);
+    self->consumer();
+}
+
+void App::consumer(){
+    Sample s;
+    while(1){
+        LogEvent ev;
+        if(xQueueReceive(ctx_.sampleQueue, &s, portMAX_DELAY) != pdTRUE){ 
+            ev.count = 0;
+            ev.timestamp_ms = 0;    
+            ev.type = LogType::ERROR;
+        }
+        else{
+            ev.count = s.count;
+            ev.timestamp_ms = s.timestamp_ms;     
+            ev.type = LogType::RECEIVED;
+        }
+        if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
+            inc_dropped_logs(&ctx_);
+        }
+    }
+}
+
+void App::inc_dropped_logs(AppContext *ctx_){
+    portENTER_CRITICAL(&ctx_->dropped_logs_mux);
+    ctx_->dropped_logs++;
+    portEXIT_CRITICAL(&ctx_->dropped_logs_mux);
 }

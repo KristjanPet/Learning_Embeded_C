@@ -1,8 +1,6 @@
 #pragma once
-#include "freertos/FreeRTOS.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "freertos/portmacro.h"   // for portMUX_TYPE
 #include "esp_task_wdt.h"
 #include "app_context.h"
 #include "app_types.h"
@@ -14,14 +12,17 @@ public:
 private:
 
     static void producer_trampoline(void *pv);
-    // static void consumer_trampoline(void *pv);
+    static void consumer_trampoline(void *pv);
     static void logger_trampoline(void *pv);
     // static void health_trampoline(void *pv);
 
     void producer();
-    // void consumer();
+    void consumer();
     void logger();
     // void health();
+
+    static inline void inc_dropped_logs(AppContext ctx_);
+    static inline uint32_t get_dropped_logs();
 
     AppContext ctx_{};
 };
