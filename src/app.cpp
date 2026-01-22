@@ -16,13 +16,18 @@ bool App::start(){
         return false;
     }
 
-    if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create producer task");
+    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, NULL) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create health task");
         return false;
     }
 
     if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, NULL) != pdPASS){
         ESP_LOGE(TAG, "Failed to create logger task");
+        return false;
+    }
+
+    if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create producer task");
         return false;
     }
 
@@ -62,6 +67,53 @@ void App::logger(){
                     break;
             }  
         }
+    }
+}
+
+void App::health_trampoline(void *pv){
+    auto *self = static_cast<App*>(pv);
+    self->health();
+}
+
+void App::health(){
+    uint32_t prev_hb = 0;
+    uint8_t stuck_seconds = 0;
+
+    int toggleSendPeriod = 0;
+
+    while(1){
+        uint32_t v = get_dropped_logs();
+        if (ctx_.producer_heartbeat == prev_hb){ //check if stuck
+            stuck_seconds++;
+        }
+        else {
+            stuck_seconds = 0;
+        }
+        prev_hb = ctx_.producer_heartbeat;
+        if (stuck_seconds >= 6) //reboot if stuck
+        {
+            ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
+            if(ctx_.producerHandle){
+                esp_task_wdt_delete(ctx_.producerHandle);
+                vTaskDelete(ctx_.producerHandle);
+                ctx_.producerHandle = nullptr;
+            }
+            xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle);
+            stuck_seconds = 0;
+        }
+        
+        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
+
+        //toggle send period for mutex
+        if (toggleSendPeriod >= 5){
+            // xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+            ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 1000 : 200;
+            // xSemaphoreGive(ctx_.settingsMutex);
+            toggleSendPeriod = 0;
+        }
+        toggleSendPeriod++;
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
