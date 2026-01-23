@@ -4,9 +4,6 @@ static const char *TAG = "APP";
 
 bool App::start(){
     ctx_.dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
-    ctx_.dropped_logs = 0;
-    ctx_.producer_stage = 0;
-    ctx_.producer_heartbeat = 0;
     ctx_.settings.producer_period_ms = 200;
 
     ctx_.sampleQueue = xQueueCreate(5, sizeof(Sample));
@@ -74,6 +71,7 @@ void App::logger(){
                     break;
             }  
         }
+        ESP_LOGI("LOG", "Working...");
     }
 }
 
@@ -115,7 +113,7 @@ void App::health(){
         //toggle send period for mutex
         if (toggleSendPeriod >= 5){
             xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-            ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 1000 : 200;
+            ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 200 : 200;
             xSemaphoreGive(ctx_.settingsMutex);
             toggleSendPeriod = 0;
         }
@@ -158,6 +156,12 @@ void App::producer(){
         auto p = ctx_.settings.producer_period_ms;
         xSemaphoreGive(ctx_.settingsMutex);
 
+        if (ctx_.producer_heartbeat % 10 == 0){
+            xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+            vTaskDelay(pdMS_TO_TICKS(4000));
+            xSemaphoreGive(ctx_.settingsMutex);
+        }
+
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(p));
     }
@@ -174,7 +178,7 @@ void App::consumer(){
     Sample s;
     while(1){
         LogEvent ev;
-        if(xQueueReceive(ctx_.sampleQueue, &s, portMAX_DELAY) != pdTRUE){ 
+        if(xQueueReceive(ctx_.sampleQueue, &s, pdMS_TO_TICKS(100)) != pdTRUE){ 
             ev.count = 0;
             ev.timestamp_ms = 0;    
             ev.type = LogType::ERROR;
@@ -187,6 +191,15 @@ void App::consumer(){
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs();
         }
+
+        if (xSemaphoreTake(ctx_.settingsMutex, pdMS_TO_TICKS(50)) == pdFALSE) {
+            ESP_LOGW("CONSUMER", "blocked on settingsMutex");
+        } else {
+            auto p = ctx_.settings.producer_period_ms;
+            ESP_LOGW("CONSUMER", "settingsMutex obteined");
+            xSemaphoreGive(ctx_.settingsMutex);
+        }
+
         ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
 }
