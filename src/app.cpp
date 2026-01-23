@@ -7,12 +7,19 @@ bool App::start(){
     ctx_.dropped_logs = 0;
     ctx_.producer_stage = 0;
     ctx_.producer_heartbeat = 0;
+    ctx_.settings.producer_period_ms = 200;
 
     ctx_.sampleQueue = xQueueCreate(5, sizeof(Sample));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
 
     if(ctx_.sampleQueue == nullptr || ctx_.logQueue == nullptr){
         ESP_LOGE(TAG, "Failed to create Queue");
+        return false;
+    }
+
+    ctx_.settingsMutex = xSemaphoreCreateMutex();
+    if (ctx_.settingsMutex == NULL){
+        ESP_LOGE("INIT", "Failed to create settings Mutex");
         return false;
     }
 
@@ -76,6 +83,7 @@ void App::health_trampoline(void *pv){
 }
 
 void App::health(){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     uint32_t prev_hb = 0;
     uint8_t stuck_seconds = 0;
 
@@ -106,13 +114,14 @@ void App::health(){
 
         //toggle send period for mutex
         if (toggleSendPeriod >= 5){
-            // xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+            xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
             ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 1000 : 200;
-            // xSemaphoreGive(ctx_.settingsMutex);
+            xSemaphoreGive(ctx_.settingsMutex);
             toggleSendPeriod = 0;
         }
         toggleSendPeriod++;
 
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
@@ -123,6 +132,8 @@ void App::producer_trampoline(void *pv){
 }
 
 void App::producer(){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+
     Sample s;
     while (true){
         LogEvent ev;
@@ -139,10 +150,16 @@ void App::producer(){
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs();
-        }
+        }   
 
         ctx_.producer_heartbeat++;
-        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+        auto p = ctx_.settings.producer_period_ms;
+        xSemaphoreGive(ctx_.settingsMutex);
+
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        vTaskDelay(pdMS_TO_TICKS(p));
     }
 }
 
@@ -152,6 +169,8 @@ void App::consumer_trampoline(void *pv){
 }
 
 void App::consumer(){
+    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+
     Sample s;
     while(1){
         LogEvent ev;
@@ -168,6 +187,7 @@ void App::consumer(){
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs();
         }
+        ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
 }
 
