@@ -20,12 +20,12 @@ bool App::start(){
         return false;
     }
 
-    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, NULL) != pdPASS){
+    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create health task");
         return false;
     }
 
-    if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, NULL) != pdPASS){
+    if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create logger task");
         return false;
     }
@@ -35,7 +35,7 @@ bool App::start(){
         return false;
     }
 
-    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, NULL) != pdPASS){
+    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create consumer task");
         return false;
     }
@@ -44,6 +44,20 @@ bool App::start(){
 }
 
 bool App::stop(){
+    if(ctx_.healthHandle){
+        esp_task_wdt_delete(ctx_.healthHandle);
+        vTaskDelete(ctx_.healthHandle);
+        ctx_.healthHandle = nullptr;
+    }
+    if(ctx_.loggerHandle){
+        vTaskDelete(ctx_.loggerHandle);
+        ctx_.loggerHandle = nullptr;
+    }
+    if(ctx_.consumerHandle){
+        esp_task_wdt_delete(ctx_.consumerHandle);
+        vTaskDelete(ctx_.consumerHandle);
+        ctx_.consumerHandle = nullptr;
+    }
     if(ctx_.producerHandle){
         esp_task_wdt_delete(ctx_.producerHandle);
         vTaskDelete(ctx_.producerHandle);

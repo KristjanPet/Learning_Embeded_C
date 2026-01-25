@@ -15,7 +15,10 @@ struct AppContext{
     QueueHandle_t logQueue;
     
     // For restart
+    TaskHandle_t loggerHandle;
+    TaskHandle_t healthHandle;
     TaskHandle_t producerHandle;
+    TaskHandle_t consumerHandle;
 
     // Breadcrumb + heartbeat
     volatile int producer_stage;
