@@ -8,6 +8,7 @@
 class App{
 public:
     bool start();
+    bool stop();
 
 private:
 

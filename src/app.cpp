@@ -43,6 +43,31 @@ bool App::start(){
     return true;
 }
 
+bool App::stop(){
+    if(ctx_.producerHandle){
+        esp_task_wdt_delete(ctx_.producerHandle);
+        vTaskDelete(ctx_.producerHandle);
+        ctx_.producerHandle = nullptr;
+    }
+
+    if(ctx_.sampleQueue){
+        vQueueDelete(ctx_.sampleQueue);
+        ctx_.sampleQueue = nullptr;
+    }
+
+    if(ctx_.logQueue){
+        vQueueDelete(ctx_.logQueue);
+        ctx_.logQueue = nullptr;
+    }
+
+    if(ctx_.settingsMutex){
+        vSemaphoreDelete(ctx_.settingsMutex);
+        ctx_.settingsMutex = nullptr;
+    }
+
+    return true;
+}
+
 void App::logger_trampoline(void *pv){
     auto *self = static_cast<App*>(pv);
     self->logger();
