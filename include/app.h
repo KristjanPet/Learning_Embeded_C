@@ -26,4 +26,7 @@ private:
     uint32_t get_dropped_logs();
 
     AppContext ctx_{};
+
+    static constexpr int POOL_N = 8;
+    Sample pool_[POOL_N];
 };

@@ -7,12 +7,21 @@ bool App::start(){
     ctx_.settings.producer_period_ms = 200;
     ctx_.stopRequested = false;
 
-    ctx_.sampleQueue = xQueueCreate(5, sizeof(Sample));
+    ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
+    ctx_.dataQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
 
-    if(ctx_.sampleQueue == nullptr || ctx_.logQueue == nullptr){
+    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr){
         ESP_LOGE(TAG, "Failed to create Queue");
         return false;
+    }
+
+    for(int i = 0; i < POOL_N; i++){
+        Sample* p = &pool_[i];
+        if (xQueueSend(ctx_.freeQ, &p, 0) != pdTRUE){
+            ESP_LOGE("INIT", "Failed to init freeQ queue");
+            return false;
+        }
     }
 
     ctx_.settingsMutex = xSemaphoreCreateMutex();
@@ -77,9 +86,14 @@ bool App::stop(){
         ctx_.loggerHandle = nullptr;
     }
 
-    if(ctx_.sampleQueue){
-        vQueueDelete(ctx_.sampleQueue);
-        ctx_.sampleQueue = nullptr;
+    if(ctx_.freeQ){
+        vQueueDelete(ctx_.freeQ);
+        ctx_.freeQ = nullptr;
+    }
+
+    if(ctx_.dataQ){
+        vQueueDelete(ctx_.dataQ);
+        ctx_.dataQ = nullptr;
     }
 
     if(ctx_.logQueue){
@@ -190,16 +204,23 @@ void App::producer_trampoline(void *pv){
 void App::producer(){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
 
-    Sample s;
+    Sample *p = nullptr;
     while (true){
         if (ctx_.stopRequested) break;
-        LogEvent ev;
-        s.count = ctx_.producer_heartbeat;
-        s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        ev.count = s.count;
-        ev.timestamp_ms = s.timestamp_ms;
 
-        if(xQueueSend(ctx_.sampleQueue, &s, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
+        if (xQueueReceive(ctx_.freeQ, &p, portMAX_DELAY) != pdTRUE){
+            ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
+            continue;
+        }
+
+        LogEvent ev;
+        p->count = ctx_.producer_heartbeat;
+        p->timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        ev.count = p->count;
+        ev.timestamp_ms = p->timestamp_ms;
+
+        if(xQueueSend(ctx_.dataQ, &p, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
+            xQueueSend(ctx_.freeQ, &p, 0);
             ev.type = LogType::DROPPED;
         }
         else{
@@ -211,6 +232,7 @@ void App::producer(){
 
         ctx_.producer_heartbeat++;
 
+        //Testing mutex
         xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
         auto p = ctx_.settings.producer_period_ms;
         xSemaphoreGive(ctx_.settingsMutex);
@@ -231,19 +253,21 @@ void App::consumer_trampoline(void *pv){
 void App::consumer(){
     ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
 
-    Sample s;
+    Sample* p = nullptr;
     while(1){
         if (ctx_.stopRequested) break;
+
         LogEvent ev;
-        if(xQueueReceive(ctx_.sampleQueue, &s, portMAX_DELAY) != pdTRUE){ 
+        if(xQueueReceive(ctx_.dataQ, &p, portMAX_DELAY) != pdTRUE){ 
             ev.count = 0;
             ev.timestamp_ms = 0;    
             ev.type = LogType::ERROR;
         }
         else{
-            ev.count = s.count;
-            ev.timestamp_ms = s.timestamp_ms;     
+            ev.count = p->count;
+            ev.timestamp_ms = p->timestamp_ms;     
             ev.type = LogType::RECEIVED;
+            xQueueSend(ctx_.freeQ, &p, 0);
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs();

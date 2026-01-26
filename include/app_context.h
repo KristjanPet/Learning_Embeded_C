@@ -11,7 +11,8 @@ struct Settings {
 };
 
 struct AppContext{
-    QueueHandle_t sampleQueue;
+    QueueHandle_t freeQ = nullptr;
+    QueueHandle_t dataQ = nullptr;
     QueueHandle_t logQueue;
     
     // For restart
