@@ -20,6 +20,9 @@ struct AppContext{
     TaskHandle_t producerHandle;
     TaskHandle_t consumerHandle;
 
+    // Stop flag
+    volatile bool stopRequested = false;
+
     // Breadcrumb + heartbeat
     volatile int producer_stage;
     volatile uint32_t producer_heartbeat;

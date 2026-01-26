@@ -5,6 +5,7 @@ static const char *TAG = "APP";
 bool App::start(){
     ctx_.dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
     ctx_.settings.producer_period_ms = 200;
+    ctx_.stopRequested = false;
 
     ctx_.sampleQueue = xQueueCreate(5, sizeof(Sample));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
@@ -44,25 +45,14 @@ bool App::start(){
 }
 
 bool App::stop(){
-    if(ctx_.healthHandle){
-        esp_task_wdt_delete(ctx_.healthHandle);
-        vTaskDelete(ctx_.healthHandle);
-        ctx_.healthHandle = nullptr;
+    ctx_.stopRequested = true;
+    const TickType_t start = xTaskGetTickCount();
+
+    while ((ctx_.producerHandle || ctx_.consumerHandle || ctx_.healthHandle || ctx_.loggerHandle) && (xTaskGetTickCount() - start < pdMS_TO_TICKS(2000)))
+    {
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
-    if(ctx_.loggerHandle){
-        vTaskDelete(ctx_.loggerHandle);
-        ctx_.loggerHandle = nullptr;
-    }
-    if(ctx_.consumerHandle){
-        esp_task_wdt_delete(ctx_.consumerHandle);
-        vTaskDelete(ctx_.consumerHandle);
-        ctx_.consumerHandle = nullptr;
-    }
-    if(ctx_.producerHandle){
-        esp_task_wdt_delete(ctx_.producerHandle);
-        vTaskDelete(ctx_.producerHandle);
-        ctx_.producerHandle = nullptr;
-    }
+    
 
     if(ctx_.sampleQueue){
         vQueueDelete(ctx_.sampleQueue);
@@ -90,6 +80,7 @@ void App::logger_trampoline(void *pv){
 void App::logger(){
     LogEvent ev;
     while (true){
+        if (ctx_.stopRequested) break;
         if(xQueueReceive(ctx_.logQueue, &ev, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("LOG", "Error receiving log");
         }else{
@@ -111,6 +102,8 @@ void App::logger(){
             }  
         }
     }
+    ctx_.loggerHandle = nullptr;
+    vTaskDelete(NULL);
 }
 
 void App::health_trampoline(void *pv){
@@ -126,6 +119,7 @@ void App::health(){
     int toggleSendPeriod = 0;
 
     while(1){
+        if (ctx_.stopRequested) break;
         uint32_t v = get_dropped_logs();
         if (ctx_.producer_heartbeat == prev_hb){ //check if stuck
             stuck_seconds++;
@@ -160,6 +154,9 @@ void App::health(){
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+    esp_task_wdt_delete(NULL);
+    ctx_.healthHandle = nullptr;
+    vTaskDelete(NULL);
 }
 
 void App::producer_trampoline(void *pv){
@@ -172,6 +169,7 @@ void App::producer(){
 
     Sample s;
     while (true){
+        if (ctx_.stopRequested) break;
         LogEvent ev;
         s.count = ctx_.producer_heartbeat;
         s.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
@@ -197,6 +195,9 @@ void App::producer(){
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(p));
     }
+    esp_task_wdt_delete(NULL);
+    ctx_.producerHandle = nullptr;
+    vTaskDelete(NULL);
 }
 
 void App::consumer_trampoline(void *pv){
@@ -209,6 +210,7 @@ void App::consumer(){
 
     Sample s;
     while(1){
+        if (ctx_.stopRequested) break;
         LogEvent ev;
         if(xQueueReceive(ctx_.sampleQueue, &s, portMAX_DELAY) != pdTRUE){ 
             ev.count = 0;
@@ -226,6 +228,9 @@ void App::consumer(){
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
+    esp_task_wdt_delete(NULL);
+    ctx_.consumerHandle = nullptr;
+    vTaskDelete(NULL);
 }
 
 void App::inc_dropped_logs(){
