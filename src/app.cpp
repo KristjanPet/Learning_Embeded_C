@@ -52,7 +52,30 @@ bool App::stop(){
     {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-    
+        
+    if (ctx_.healthHandle) { //still running, force stop
+        ESP_LOGE("APP", "Stop timeout: force-deleting health tasks");
+        esp_task_wdt_delete(ctx_.healthHandle);
+        vTaskDelete(ctx_.healthHandle);
+        ctx_.healthHandle = nullptr;
+    }
+    if (ctx_.consumerHandle) {
+        ESP_LOGE("APP", "Stop timeout: force-deleting consumer tasks");
+        esp_task_wdt_delete(ctx_.consumerHandle);
+        vTaskDelete(ctx_.consumerHandle);
+        ctx_.consumerHandle = nullptr;
+    }
+    if (ctx_.producerHandle) {
+        ESP_LOGE("APP", "Stop timeout: force-deleting producer tasks");
+        esp_task_wdt_delete(ctx_.producerHandle);
+        vTaskDelete(ctx_.producerHandle);
+        ctx_.producerHandle = nullptr;
+    }
+    if (ctx_.loggerHandle) {
+        ESP_LOGE("APP", "Stop timeout: force-deleting logger tasks");
+        vTaskDelete(ctx_.loggerHandle);
+        ctx_.loggerHandle = nullptr;
+    }
 
     if(ctx_.sampleQueue){
         vQueueDelete(ctx_.sampleQueue);
