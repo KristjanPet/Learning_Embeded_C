@@ -55,6 +55,11 @@ bool App::start(){
 
 bool App::stop(){
     ctx_.stopRequested = true;
+
+    if (ctx_.consumerHandle){ //ping the task
+        xTaskNotifyGive(ctx_.consumerHandle);
+    }
+
     const TickType_t start = xTaskGetTickCount();
 
     while ((ctx_.producerHandle || ctx_.consumerHandle || ctx_.healthHandle || ctx_.loggerHandle) && (xTaskGetTickCount() - start < pdMS_TO_TICKS(2000)))
@@ -256,13 +261,12 @@ void App::consumer(){
     while(1){
         if (ctx_.stopRequested) break;
 
-        LogEvent ev;
-        if(xQueueReceive(ctx_.dataQ, &p, portMAX_DELAY) != pdTRUE){ 
-            ev.count = 0;
-            ev.timestamp_ms = 0;    
-            ev.type = LogType::ERROR;
+        if (ulTaskNotifyTake(pdTRUE, 0) > 0){
+            continue;
         }
-        else{
+
+        LogEvent ev;
+        if(xQueueReceive(ctx_.dataQ, &p, pdMS_TO_TICKS(100)) == pdTRUE){ 
             ev.count = p->count;
             ev.timestamp_ms = p->timestamp_ms;     
             ev.type = LogType::RECEIVED;
