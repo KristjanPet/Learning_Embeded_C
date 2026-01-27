@@ -219,18 +219,17 @@ void App::producer(){
         ev.count = p->count;
         ev.timestamp_ms = p->timestamp_ms;
 
-        if(xQueueSend(ctx_.dataQ, &p, pdMS_TO_TICKS(50)) != pdTRUE){ //sending data
+        if(xQueueSend(ctx_.dataQ, &p, portMAX_DELAY) != pdTRUE){ //sending data
             xQueueSend(ctx_.freeQ, &p, 0);
-            ev.type = LogType::DROPPED;
+            ev.type = LogType::ERROR;
         }
         else{
             ev.type = LogType::SENT;
+            ctx_.producer_heartbeat++;
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs();
         }   
-
-        ctx_.producer_heartbeat++;
 
         //Testing mutex
         xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
