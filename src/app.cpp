@@ -56,9 +56,11 @@ bool App::start(){
 bool App::stop(){
     ctx_.stopRequested = true;
 
-    if (ctx_.consumerHandle){ //ping the task
-        xTaskNotifyGive(ctx_.consumerHandle);
-    }
+    Sample* poison = nullptr;
+    LogEvent logPoison{ LogType::STOP, 0, 0};
+    xQueueSend(ctx_.dataQ, &poison, 0); //send poison-pill to break task
+    xQueueSend(ctx_.freeQ, &poison, 0);
+    xQueueSend(ctx_.logQueue, &logPoison, 0);
 
     const TickType_t start = xTaskGetTickCount();
 
@@ -126,6 +128,7 @@ void App::logger(){
         if(xQueueReceive(ctx_.logQueue, &ev, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("LOG", "Error receiving log");
         }else{
+            if (ev.type == LogType::STOP) break;
             switch (ev.type)
             {
                 case LogType::SENT:
@@ -139,6 +142,7 @@ void App::logger(){
                     break;
                 case LogType::ERROR:
                     ESP_LOGE("LOG", "ERROR while sending sample");
+                    break;
                 default:
                     break;
             }  
@@ -217,6 +221,9 @@ void App::producer(){
             ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
             continue;
         }
+        else if (p == nullptr){
+            break;
+        }
 
         LogEvent ev;
         p->count = ctx_.producer_heartbeat;
@@ -261,16 +268,16 @@ void App::consumer(){
     while(1){
         if (ctx_.stopRequested) break;
 
-        if (ulTaskNotifyTake(pdTRUE, 0) > 0){
-            continue;
-        }
-
         LogEvent ev;
-        if(xQueueReceive(ctx_.dataQ, &p, pdMS_TO_TICKS(100)) == pdTRUE){ 
+        if(xQueueReceive(ctx_.dataQ, &p, portMAX_DELAY) == pdTRUE){ 
+            if(p == nullptr) break;
             ev.count = p->count;
             ev.timestamp_ms = p->timestamp_ms;     
             ev.type = LogType::RECEIVED;
             xQueueSend(ctx_.freeQ, &p, 0);
+        }
+        else{
+            continue;
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
             inc_dropped_logs();
