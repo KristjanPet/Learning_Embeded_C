@@ -16,6 +16,11 @@ bool App::start(){
         return false;
     }
 
+    if (!samples_.init()) { 
+        ESP_LOGE(TAG, "PoolQueue init failed"); 
+        return false; 
+    }
+
     for(int i = 0; i < POOL_N; i++){
         Sample* p = &pool_[i];
         if (xQueueSend(ctx_.freeQ, &p, 0) != pdTRUE){
@@ -217,26 +222,17 @@ void App::producer(){
     while (true){
         if (ctx_.stopRequested) break;
 
-        if (xQueueReceive(ctx_.freeQ, &p, portMAX_DELAY) != pdTRUE){
-            ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
-            continue;
-        }
-        else if (p == nullptr){
-            break;
-        }
+        auto slot = samples_.acquire(portMAX_DELAY);
+        if (!slot) continue; // or log
 
-        LogEvent ev;
-        p->count = ctx_.producer_heartbeat;
-        p->timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        ev.count = p->count;
-        ev.timestamp_ms = p->timestamp_ms;
+        slot->count = ctx_.producer_heartbeat;
+        slot->timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
-        if(xQueueSend(ctx_.dataQ, &p, portMAX_DELAY) != pdTRUE){ //sending data
-            xQueueSend(ctx_.freeQ, &p, 0);
-            ev.type = LogType::ERROR;
-        }
-        else{
-            ev.type = LogType::SENT;
+        LogEvent ev{LogType::SENT, slot->count, slot->timestamp_ms};
+
+        if (!slot.publish(portMAX_DELAY)) {
+            ev.type = LogType::ERROR; // slot destructor returns to freeQ automatically
+        } else {
             ctx_.producer_heartbeat++;
         }
         if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
@@ -269,12 +265,11 @@ void App::consumer(){
         if (ctx_.stopRequested) break;
 
         LogEvent ev;
-        if(xQueueReceive(ctx_.dataQ, &p, portMAX_DELAY) == pdTRUE){ 
-            if(p == nullptr) break;
+        if(samples_.receive(&p, portMAX_DELAY)){ 
             ev.count = p->count;
             ev.timestamp_ms = p->timestamp_ms;     
             ev.type = LogType::RECEIVED;
-            xQueueSend(ctx_.freeQ, &p, 0);
+            samples_.release(p);
         }
         else{
             continue;
