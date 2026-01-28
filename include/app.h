@@ -4,7 +4,6 @@
 #include "esp_task_wdt.h"
 #include "app_context.h"
 #include "app_types.h"
-#include "pool_queue.hpp"
 
 class App{
 public:
@@ -30,5 +29,4 @@ private:
 
     static constexpr int POOL_N = 8;
     Sample pool_[POOL_N];
-    PoolQueue<Sample, POOL_N> samples_;
 };
