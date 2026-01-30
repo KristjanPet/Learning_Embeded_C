@@ -20,6 +20,7 @@ struct AppContext{
     TaskHandle_t healthHandle;
     TaskHandle_t producerHandle;
     TaskHandle_t consumerHandle;
+    TaskHandle_t buttonHandle;
 
     // Stop flag
     volatile bool stopRequested = false;
