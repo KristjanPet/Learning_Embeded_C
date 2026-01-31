@@ -13,3 +13,5 @@ struct LogEvent{
     int count;
     uint32_t timestamp_ms;
 };
+
+enum class ButtonEvent : uint8_t { Press };

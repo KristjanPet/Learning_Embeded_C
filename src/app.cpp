@@ -21,6 +21,7 @@ bool App::start(){
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.dataQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
+    ctx_.buttonQ = xQueueCreate(100, sizeof(ButtonEvent));
 
     //button setup
     gpio_config_t io_conf{};
@@ -30,11 +31,6 @@ bool App::start(){
     io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
-
-    if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create button task");
-        return false;
-    }
 
     //LED setup
     gpio_config_t led_conf{};
@@ -52,7 +48,7 @@ bool App::start(){
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));
 
-    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr){
+    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr || ctx_.buttonQ == nullptr){
         ESP_LOGE(TAG, "Failed to create Queue");
         return false;
     }
@@ -68,6 +64,15 @@ bool App::start(){
     ctx_.settingsMutex = xSemaphoreCreateMutex();
     if (ctx_.settingsMutex == NULL){
         ESP_LOGE("INIT", "Failed to create settings Mutex");
+        return false;
+    }
+
+    if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create ui task"); return false;
+    }
+
+    if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create button task");
         return false;
     }
 
@@ -337,7 +342,6 @@ void App::button_trampoline(void *pv){
 }
 
 void App::button(){
-    bool ledOn = false;
     const TickType_t debounce = pdMS_TO_TICKS(50);
 
     while(true){
@@ -347,19 +351,38 @@ void App::button(){
 
         vTaskDelay(debounce);
 
-        while(gpio_get_level(GPIO_NUM_4) == 0){
-            ledOn = !ledOn;
-            gpio_set_level(GPIO_NUM_2, ledOn);
-            ESP_LOGI("BTN", "Pressed LED=%d", (int)ledOn);
-
-            // while (gpio_get_level(GPIO_NUM_4) == 0){ //wait for release
-            //     vTaskDelay(pdMS_TO_TICKS(10));
-            // }
-            vTaskDelay(pdMS_TO_TICKS(500));
+        if(gpio_get_level(GPIO_NUM_4) == 0){
+            ButtonEvent ev = ButtonEvent::Press;
+            xQueueSend(ctx_.buttonQ, &ev, 0);
         }
     }
 
     vTaskDelete(NULL);
+}
+
+void App::ui_trampoline(void* pv){
+    static_cast<App*>(pv)->ui_task();
+}
+
+void App::ui_task(){
+    bool led = false;
+    ButtonEvent ev;
+
+    while(true){
+        if(ctx_.stopRequested) break;
+
+        if(xQueueReceive(ctx_.buttonQ, &ev, pdMS_TO_TICKS(200)) == pdTRUE){
+            if(ev == ButtonEvent::Press){
+                led = !led;
+                gpio_set_level(GPIO_NUM_2, led);
+                ESP_LOGI("UI", "LED=%d", (int)led);
+                UBaseType_t waiting = uxQueueMessagesWaiting(ctx_.buttonQ);
+                ESP_LOGI("UI", "Waiting in queue=%d", waiting);
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
 }
 
 void App::inc_dropped_logs(){

@@ -19,12 +19,14 @@ private:
     static void logger_trampoline(void *pv);
     static void health_trampoline(void *pv);
     static void button_trampoline(void* pv);
+    static void ui_trampoline(void* pv);
 
     void producer();
     void consumer();
     void logger();
     void health();
     void button();
+    void ui_task();
 
     void inc_dropped_logs();
     uint32_t get_dropped_logs();
