@@ -6,7 +6,7 @@ struct Sample {
     uint32_t timestamp_ms;
 };
 
-enum class LogType : uint8_t { SENT, DROPPED, RECEIVED, ERROR, STOP };
+enum class LogType : uint8_t { SENT, DROPPED, RECEIVED, ERROR, STOP, CHANGED };
 
 struct LogEvent{
     LogType type;

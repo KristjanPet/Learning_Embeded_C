@@ -191,6 +191,9 @@ void App::logger(){
                 case LogType::ERROR:
                     ESP_LOGE("LOG", "ERROR while sending sample");
                     break;
+                case LogType::CHANGED:
+                    ESP_LOGE("LOG", "period changed to: %d", ev.count);
+                    break;
                 default:
                     break;
             }  
@@ -237,13 +240,13 @@ void App::health(){
         ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
         //toggle send period for mutex
-        if (toggleSendPeriod >= 5){
-            xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-            ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 1000 : 2000;
-            xSemaphoreGive(ctx_.settingsMutex);
-            toggleSendPeriod = 0;
-        }
-        toggleSendPeriod++;
+        // if (toggleSendPeriod >= 5){
+        //     xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+        //     ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 1000 : 2000;
+        //     xSemaphoreGive(ctx_.settingsMutex);
+        //     toggleSendPeriod = 0;
+        // }
+        // toggleSendPeriod++;
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -364,6 +367,7 @@ void App::button(){
         gpio_intr_enable(GPIO_NUM_4);
     }
 
+    ctx_.buttonHandle = nullptr;
     vTaskDelete(NULL);
 }
 
@@ -374,6 +378,7 @@ void App::ui_trampoline(void* pv){
 void App::ui_task(){
     bool led = false;
     ButtonEvent ev;
+    LogEvent logEvent;
 
     while(true){
         if(ctx_.stopRequested) break;
@@ -383,13 +388,25 @@ void App::ui_task(){
                 led = !led;
                 gpio_set_level(GPIO_NUM_2, led);
                 ESP_LOGI("UI", "LED=%d", (int)led);
-                UBaseType_t waiting = uxQueueMessagesWaiting(ctx_.buttonQ);
-                ESP_LOGI("UI", "Waiting in queue=%d", waiting);
-            }
 
-            vTaskDelay(pdMS_TO_TICKS(500));
+                xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+                ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
+                logEvent.count = (int)ctx_.settings.producer_period_ms;
+                xSemaphoreGive(ctx_.settingsMutex);
+
+                logEvent.type = LogType::CHANGED;
+                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
+                    inc_dropped_logs();
+                }  
+                
+            }
         }
     }
+
+    ctx_.uiHandle = nullptr;
+    vTaskDelete(NULL);
 }
 
 void App::inc_dropped_logs(){
