@@ -17,7 +17,7 @@ static const char *TAG = "APP";
 
 bool App::start(){
     ctx_.dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
-    ctx_.settings.producer_period_ms = 200;
+    ctx_.settings.producer_period_ms = 2000;
     ctx_.stopRequested = false;
 
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
@@ -348,6 +348,8 @@ void App::button_trampoline(void *pv){
 
 void App::button(){
     const TickType_t debounce = pdMS_TO_TICKS(50);
+    int64_t t0 = 0;
+    ButtonEvent ev;
 
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //waiting for ISR
@@ -359,11 +361,21 @@ void App::button(){
 
         vTaskDelay(debounce);
 
-        if(gpio_get_level(GPIO_NUM_4) == 0){
-            ButtonEvent ev = ButtonEvent::Press;
-            xQueueSend(ctx_.buttonQ, &ev, 0);
+        t0 = esp_timer_get_time();
+        while(gpio_get_level(GPIO_NUM_4) == 0){
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (esp_timer_get_time() - t0 > 800000){
+            ev = ButtonEvent::LongPress;
+        }
+        else{
+            ev = ButtonEvent::ShortPress;
         }
 
+        if(xQueueSend(ctx_.buttonQ, &ev, 0) != pdTRUE){
+            inc_dropped_logs();
+        }
+        
         gpio_intr_enable(GPIO_NUM_4);
     }
 
@@ -384,7 +396,7 @@ void App::ui_task(){
         if(ctx_.stopRequested) break;
 
         if(xQueueReceive(ctx_.buttonQ, &ev, pdMS_TO_TICKS(200)) == pdTRUE){
-            if(ev == ButtonEvent::Press){
+            if(ev == ButtonEvent::ShortPress){
                 led = !led;
                 gpio_set_level(GPIO_NUM_2, led);
                 ESP_LOGI("UI", "LED=%d", (int)led);
