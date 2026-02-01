@@ -1,17 +1,56 @@
 #include "app.h"
+#include "driver/gpio.h"
+
+static void IRAM_ATTR gpio_isr_handler(void* arg) {
+    auto* self = static_cast<App*>(arg);
+    gpio_intr_disable(GPIO_NUM_4);
+
+    BaseType_t hpw = pdFALSE;
+    auto h = self->getButtonHandle();
+    if (h){
+        vTaskNotifyGiveFromISR(h, &hpw);
+        if (hpw) portYIELD_FROM_ISR();
+    }
+}
 
 static const char *TAG = "APP";
 
 bool App::start(){
     ctx_.dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
-    ctx_.settings.producer_period_ms = 200;
+    ctx_.settings.producer_period_ms = 2000;
     ctx_.stopRequested = false;
 
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.dataQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
+    ctx_.buttonQ = xQueueCreate(100, sizeof(ButtonEvent));
 
-    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr){
+    //button setup
+    gpio_config_t io_conf{};
+    io_conf.intr_type = GPIO_INTR_NEGEDGE;          // falling edge (press)
+    io_conf.mode = GPIO_MODE_INPUT;
+    io_conf.pin_bit_mask = 1ULL << GPIO_NUM_4;
+    io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+
+    //LED setup
+    gpio_config_t led_conf{};
+    led_conf.intr_type = GPIO_INTR_DISABLE;
+    led_conf.mode = GPIO_MODE_OUTPUT;
+    led_conf.pin_bit_mask = 1ULL << GPIO_NUM_2;
+    led_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    led_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&led_conf));
+
+    gpio_set_level(GPIO_NUM_2, 0); // start OFF
+
+
+    //intall and register ISR
+    ESP_ERROR_CHECK(gpio_install_isr_service(0));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));
+
+    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr || ctx_.buttonQ == nullptr){
         ESP_LOGE(TAG, "Failed to create Queue");
         return false;
     }
@@ -27,6 +66,15 @@ bool App::start(){
     ctx_.settingsMutex = xSemaphoreCreateMutex();
     if (ctx_.settingsMutex == NULL){
         ESP_LOGE("INIT", "Failed to create settings Mutex");
+        return false;
+    }
+
+    if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create ui task"); return false;
+    }
+
+    if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create button task");
         return false;
     }
 
@@ -143,6 +191,9 @@ void App::logger(){
                 case LogType::ERROR:
                     ESP_LOGE("LOG", "ERROR while sending sample");
                     break;
+                case LogType::CHANGED:
+                    ESP_LOGE("LOG", "period changed to: %d", ev.count);
+                    break;
                 default:
                     break;
             }  
@@ -174,7 +225,7 @@ void App::health(){
             stuck_seconds = 0;
         }
         prev_hb = ctx_.producer_heartbeat;
-        if (stuck_seconds >= 6) //reboot if stuck
+        if (stuck_seconds >= 6 && !ctx_.producerPaused) //reboot if stuck
         {
             ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
             if(ctx_.producerHandle){
@@ -187,15 +238,6 @@ void App::health(){
         }
         
         ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
-
-        //toggle send period for mutex
-        if (toggleSendPeriod >= 5){
-            xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-            ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 200 : 200;
-            xSemaphoreGive(ctx_.settingsMutex);
-            toggleSendPeriod = 0;
-        }
-        toggleSendPeriod++;
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -216,6 +258,12 @@ void App::producer(){
     Sample *p = nullptr;
     while (true){
         if (ctx_.stopRequested) break;
+
+        if(ctx_.producerPaused){
+            vTaskDelay(pdMS_TO_TICKS(50));
+            ESP_ERROR_CHECK(esp_task_wdt_reset());
+            continue;
+        }
 
         if (xQueueReceive(ctx_.freeQ, &p, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
@@ -269,24 +317,112 @@ void App::consumer(){
         if (ctx_.stopRequested) break;
 
         LogEvent ev;
-        if(xQueueReceive(ctx_.dataQ, &p, portMAX_DELAY) == pdTRUE){ 
+        if(xQueueReceive(ctx_.dataQ, &p, pdMS_TO_TICKS(200)) == pdTRUE){ 
             if(p == nullptr) break;
             ev.count = p->count;
             ev.timestamp_ms = p->timestamp_ms;     
             ev.type = LogType::RECEIVED;
             xQueueSend(ctx_.freeQ, &p, 0);
-        }
-        else{
-            continue;
-        }
-        if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
-            inc_dropped_logs();
+            if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
+                inc_dropped_logs();
+            }
         }
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
     esp_task_wdt_delete(NULL);
     ctx_.consumerHandle = nullptr;
+    vTaskDelete(NULL);
+}
+
+void App::button_trampoline(void *pv){
+    auto *self = static_cast<App*>(pv);
+    self->button();
+}
+
+void App::button(){
+    const TickType_t debounce = pdMS_TO_TICKS(50);
+    int64_t t0 = 0;
+    ButtonEvent ev;
+
+    while(true){
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //waiting for ISR
+
+        if(ctx_.stopRequested){
+            gpio_intr_enable(GPIO_NUM_4);
+            break;
+        } 
+
+        vTaskDelay(debounce);
+
+        t0 = esp_timer_get_time();
+        while(gpio_get_level(GPIO_NUM_4) == 0){
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        if (esp_timer_get_time() - t0 > 800000){
+            ev = ButtonEvent::LongPress;
+        }
+        else{
+            ev = ButtonEvent::ShortPress;
+        }
+
+        if(xQueueSend(ctx_.buttonQ, &ev, 0) != pdTRUE){
+            inc_dropped_logs();
+        }
+        
+        gpio_intr_enable(GPIO_NUM_4);
+    }
+
+    ctx_.buttonHandle = nullptr;
+    vTaskDelete(NULL);
+}
+
+void App::ui_trampoline(void* pv){
+    static_cast<App*>(pv)->ui_task();
+}
+
+void App::ui_task(){
+    bool led = false;
+    ButtonEvent ev;
+    LogEvent logEvent;
+
+    while(true){
+        if(ctx_.stopRequested) break;
+
+        if(xQueueReceive(ctx_.buttonQ, &ev, pdMS_TO_TICKS(200)) == pdTRUE){
+            if(ev == ButtonEvent::ShortPress){
+                led = !led;
+                gpio_set_level(GPIO_NUM_2, led);
+                ESP_LOGI("UI", "LED=%d", (int)led);
+
+                xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+                ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
+                logEvent.count = (int)ctx_.settings.producer_period_ms;
+                xSemaphoreGive(ctx_.settingsMutex);
+
+                logEvent.type = LogType::CHANGED;
+                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
+                    inc_dropped_logs();
+                }  
+                
+            }
+            else if(ev == ButtonEvent::LongPress){
+                ctx_.producerPaused = !ctx_.producerPaused;
+
+                logEvent.type = LogType::PAUSED;
+                logEvent.count = ctx_.producerPaused;
+                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
+                    inc_dropped_logs();
+                }  
+            }
+        }
+    }
+
+    ctx_.uiHandle = nullptr;
     vTaskDelete(NULL);
 }
 
