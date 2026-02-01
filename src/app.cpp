@@ -3,6 +3,8 @@
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
+    gpio_intr_disable(GPIO_NUM_4);
+
     BaseType_t hpw = pdFALSE;
     auto h = self->getButtonHandle();
     if (h){
@@ -347,7 +349,10 @@ void App::button(){
     while(true){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //waiting for ISR
 
-        if(ctx_.stopRequested) break;
+        if(ctx_.stopRequested){
+            gpio_intr_enable(GPIO_NUM_4);
+            break;
+        } 
 
         vTaskDelay(debounce);
 
@@ -355,6 +360,8 @@ void App::button(){
             ButtonEvent ev = ButtonEvent::Press;
             xQueueSend(ctx_.buttonQ, &ev, 0);
         }
+
+        gpio_intr_enable(GPIO_NUM_4);
     }
 
     vTaskDelete(NULL);
