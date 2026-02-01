@@ -454,6 +454,8 @@ void App::uart(){
     while(true){
         if(ctx_.stopRequested) break;
 
+        CommandEvent ev;
+        bool ok = true;
         int n = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(200));
         
         //normalize
@@ -463,7 +465,27 @@ void App::uart(){
 
         ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
 
-        //TODO: act on 't', 'p', ...
+        switch(ch){
+            case 't':
+                ev = CommandEvent::TogglePeriod;
+                break;
+            case 'p':
+                ev = CommandEvent::TogglePause;
+                break;
+            case 's':
+                ev = CommandEvent::Status;
+                break;
+            default:
+                ok = false;
+                break;
+        }
+
+        if(ok){
+            xQueueSend(ctx_.cmdQ, &ev, 0);
+        }
+        else{
+            ESP_LOGW("UART", "Unknown command '%c' (use t/p/s)", (char)ch);
+        }
     }
 
     vTaskDelete(NULL);
