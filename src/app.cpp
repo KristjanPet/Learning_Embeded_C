@@ -427,31 +427,10 @@ void App::ui_task(){
                 if(ev == ButtonEvent::ShortPress){
                     led = !led;
                     gpio_set_level(GPIO_NUM_2, led);
-                    ESP_LOGI("UI", "LED=%d", (int)led);
-
-                    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-                    ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
-                    logEvent.count = (int)ctx_.settings.producer_period_ms;
-                    xSemaphoreGive(ctx_.settingsMutex);
-
-                    logEvent.type = LogType::CHANGED;
-                    logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-                    if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
-                        inc_dropped_logs();
-                    }  
-
+                    handle_toggle_period();
                 }
                 else if(ev == ButtonEvent::LongPress){
-                    ctx_.producerPaused = !ctx_.producerPaused;
-
-                    logEvent.type = LogType::PAUSED;
-                    logEvent.count = ctx_.producerPaused;
-                    logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-                    if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
-                        inc_dropped_logs();
-                    }  
+                    handle_toggle_pause();
                 }
             }
         } 
@@ -461,13 +440,10 @@ void App::ui_task(){
                 switch (ev)
                 {
                 case CommandEvent::TogglePeriod:
-                    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-                    ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
-                    logEvent.count = (int)ctx_.settings.producer_period_ms;
-                    xSemaphoreGive(ctx_.settingsMutex);
+                    handle_toggle_period();
                     break;
                 case CommandEvent::TogglePause:
-                    ctx_.producerPaused = !ctx_.producerPaused;
+                    handle_toggle_pause();
                     break;
                 case CommandEvent::Status:
                     handle_status();
@@ -502,7 +478,7 @@ void App::uart(){
             continue;
         }
 
-        ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
+        // ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
 
         switch(ch){
             case 't':
@@ -553,4 +529,34 @@ void App::handle_status() {
              (int)ctx_.producerPaused, (unsigned)period,
              (unsigned)ctx_.producer_heartbeat,
              (unsigned)get_dropped_logs());
+}
+
+void App::handle_toggle_period() {
+    uint32_t newPeriod;
+
+    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+    ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
+    newPeriod = ctx_.settings.producer_period_ms;
+    xSemaphoreGive(ctx_.settingsMutex);
+
+    LogEvent le{};
+    le.type = LogType::CHANGED;
+    le.count = (int)newPeriod;
+    le.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    
+    if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
+        inc_dropped_logs();
+    }  
+}
+
+void App::handle_toggle_pause() {
+    ctx_.producerPaused = !ctx_.producerPaused;
+
+    LogEvent le{};
+    le.type = LogType::PAUSED;
+    le.count = ctx_.producerPaused ? 1 : 0;
+    le.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
+        inc_dropped_logs();
+    }  
 }
