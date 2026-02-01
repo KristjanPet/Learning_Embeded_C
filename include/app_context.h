@@ -16,6 +16,7 @@ struct AppContext{
     QueueHandle_t logQueue = nullptr;
     QueueHandle_t buttonQ = nullptr;
     QueueHandle_t cmdQ = nullptr;
+    QueueSetHandle_t uiSet = nullptr;
     
     // For restart
     TaskHandle_t loggerHandle;

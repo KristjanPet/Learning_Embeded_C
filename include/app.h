@@ -36,6 +36,8 @@ private:
     void inc_dropped_logs();
     uint32_t get_dropped_logs();
 
+    void handle_status();
+
     AppContext ctx_{};
 
     static constexpr int POOL_N = 8;

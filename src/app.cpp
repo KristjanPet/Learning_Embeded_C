@@ -23,8 +23,19 @@ bool App::start(){
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.dataQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
-    ctx_.buttonQ = xQueueCreate(100, sizeof(ButtonEvent));
-    ctx_.cmdQ = xQueueCreate(10, sizeof(CommandEvent)); 
+    ctx_.buttonQ = xQueueCreate(10, sizeof(ButtonEvent));
+    ctx_.cmdQ = xQueueCreate(10, sizeof(CommandEvent));
+    ctx_.uiSet = xQueueCreateSet(20);
+
+    if(!ctx_.uiSet){
+        ESP_LOGE(TAG, "Failed to create uiSet");
+        return false;
+    }
+
+    if (xQueueAddToSet(ctx_.buttonQ, ctx_.uiSet) != pdPASS || xQueueAddToSet(ctx_.cmdQ, ctx_.uiSet) != pdPASS) {
+        ESP_LOGE(TAG, "xQueueAddToSet failed");
+        return false;
+    }
 
     //UART init
     const uart_port_t UART_NUM = UART_NUM_0;
@@ -401,41 +412,69 @@ void App::ui_trampoline(void* pv){
 
 void App::ui_task(){
     bool led = false;
-    ButtonEvent ev;
     LogEvent logEvent;
 
     while(true){
         if(ctx_.stopRequested) break;
 
-        if(xQueueReceive(ctx_.buttonQ, &ev, pdMS_TO_TICKS(200)) == pdTRUE){
-            if(ev == ButtonEvent::ShortPress){
-                led = !led;
-                gpio_set_level(GPIO_NUM_2, led);
-                ESP_LOGI("UI", "LED=%d", (int)led);
+        QueueSetMemberHandle_t active = xQueueSelectFromSet(ctx_.uiSet, pdMS_TO_TICKS(200));
 
-                xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-                ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
-                logEvent.count = (int)ctx_.settings.producer_period_ms;
-                xSemaphoreGive(ctx_.settingsMutex);
+        if(active == nullptr) continue;
 
-                logEvent.type = LogType::CHANGED;
-                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        if(active == ctx_.buttonQ){
+            ButtonEvent ev;
+            if(xQueueReceive(ctx_.buttonQ, &ev, 0) == pdTRUE){
+                if(ev == ButtonEvent::ShortPress){
+                    led = !led;
+                    gpio_set_level(GPIO_NUM_2, led);
+                    ESP_LOGI("UI", "LED=%d", (int)led);
 
-                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
-                    inc_dropped_logs();
-                }  
-                
+                    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+                    ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
+                    logEvent.count = (int)ctx_.settings.producer_period_ms;
+                    xSemaphoreGive(ctx_.settingsMutex);
+
+                    logEvent.type = LogType::CHANGED;
+                    logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                    if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
+                        inc_dropped_logs();
+                    }  
+
+                }
+                else if(ev == ButtonEvent::LongPress){
+                    ctx_.producerPaused = !ctx_.producerPaused;
+
+                    logEvent.type = LogType::PAUSED;
+                    logEvent.count = ctx_.producerPaused;
+                    logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                    if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
+                        inc_dropped_logs();
+                    }  
+                }
             }
-            else if(ev == ButtonEvent::LongPress){
-                ctx_.producerPaused = !ctx_.producerPaused;
-
-                logEvent.type = LogType::PAUSED;
-                logEvent.count = ctx_.producerPaused;
-                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
-                    inc_dropped_logs();
-                }  
+        } 
+        else if(active == ctx_.cmdQ){
+            CommandEvent ev;
+            if(xQueueReceive(ctx_.cmdQ, &ev, 0) == pdTRUE){
+                switch (ev)
+                {
+                case CommandEvent::TogglePeriod:
+                    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+                    ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
+                    logEvent.count = (int)ctx_.settings.producer_period_ms;
+                    xSemaphoreGive(ctx_.settingsMutex);
+                    break;
+                case CommandEvent::TogglePause:
+                    ctx_.producerPaused = !ctx_.producerPaused;
+                    break;
+                case CommandEvent::Status:
+                    handle_status();
+                    break;
+                default:
+                    break;
+                }
             }
         }
     }
@@ -502,4 +541,16 @@ uint32_t App::get_dropped_logs() {
     uint32_t v = ctx_.dropped_logs;
     portEXIT_CRITICAL(&ctx_.dropped_logs_mux);
     return v;
+}
+
+void App::handle_status() {
+    uint32_t period;
+    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+    period = ctx_.settings.producer_period_ms;
+    xSemaphoreGive(ctx_.settingsMutex);
+
+    ESP_LOGI("STATUS", "paused=%d period_ms=%u hb=%u dropped=%u",
+             (int)ctx_.producerPaused, (unsigned)period,
+             (unsigned)ctx_.producer_heartbeat,
+             (unsigned)get_dropped_logs());
 }
