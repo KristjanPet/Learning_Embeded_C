@@ -225,7 +225,7 @@ void App::health(){
             stuck_seconds = 0;
         }
         prev_hb = ctx_.producer_heartbeat;
-        if (stuck_seconds >= 6) //reboot if stuck
+        if (stuck_seconds >= 6 && !ctx_.producerPaused) //reboot if stuck
         {
             ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
             if(ctx_.producerHandle){
@@ -238,15 +238,6 @@ void App::health(){
         }
         
         ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
-
-        //toggle send period for mutex
-        // if (toggleSendPeriod >= 5){
-        //     xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-        //     ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 200) ? 1000 : 2000;
-        //     xSemaphoreGive(ctx_.settingsMutex);
-        //     toggleSendPeriod = 0;
-        // }
-        // toggleSendPeriod++;
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -267,6 +258,12 @@ void App::producer(){
     Sample *p = nullptr;
     while (true){
         if (ctx_.stopRequested) break;
+
+        if(ctx_.producerPaused){
+            vTaskDelay(pdMS_TO_TICKS(50));
+            ESP_ERROR_CHECK(esp_task_wdt_reset());
+            continue;
+        }
 
         if (xQueueReceive(ctx_.freeQ, &p, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
@@ -320,18 +317,15 @@ void App::consumer(){
         if (ctx_.stopRequested) break;
 
         LogEvent ev;
-        if(xQueueReceive(ctx_.dataQ, &p, portMAX_DELAY) == pdTRUE){ 
+        if(xQueueReceive(ctx_.dataQ, &p, pdMS_TO_TICKS(200)) == pdTRUE){ 
             if(p == nullptr) break;
             ev.count = p->count;
             ev.timestamp_ms = p->timestamp_ms;     
             ev.type = LogType::RECEIVED;
             xQueueSend(ctx_.freeQ, &p, 0);
-        }
-        else{
-            continue;
-        }
-        if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
-            inc_dropped_logs();
+            if(xQueueSend(ctx_.logQueue, &ev, 0) != pdTRUE){
+                inc_dropped_logs();
+            }
         }
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
@@ -413,6 +407,17 @@ void App::ui_task(){
                     inc_dropped_logs();
                 }  
                 
+            }
+            else if(ev == ButtonEvent::LongPress){
+                ctx_.producerPaused = !ctx_.producerPaused;
+
+                logEvent.type = LogType::PAUSED;
+                logEvent.count = ctx_.producerPaused;
+                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
+                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
+                    inc_dropped_logs();
+                }  
             }
         }
     }

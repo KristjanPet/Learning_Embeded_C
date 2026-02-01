@@ -26,6 +26,7 @@ struct AppContext{
 
     // Stop flag
     volatile bool stopRequested = false;
+    volatile bool producerPaused = false;
 
     // Breadcrumb + heartbeat
     volatile int producer_stage;
