@@ -1,5 +1,5 @@
 #include "app.h"
-#include "driver/gpio.h"
+
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -24,6 +24,20 @@ bool App::start(){
     ctx_.dataQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
     ctx_.buttonQ = xQueueCreate(100, sizeof(ButtonEvent));
+    ctx_.cmdQ = xQueueCreate(10, sizeof(CommandEvent)); 
+
+    //UART init
+    const uart_port_t UART_NUM = UART_NUM_0;
+
+    uart_config_t uart_cfg{};
+    uart_cfg.baud_rate = 115200;
+    uart_cfg.data_bits = UART_DATA_8_BITS;
+    uart_cfg.parity    = UART_PARITY_DISABLE;
+    uart_cfg.stop_bits = UART_STOP_BITS_1;
+    uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_cfg));
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, 2048, 0, 0, nullptr, 0));
 
     //button setup
     gpio_config_t io_conf{};
@@ -50,7 +64,7 @@ bool App::start(){
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));
 
-    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr || ctx_.buttonQ == nullptr){
+    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr || ctx_.buttonQ == nullptr || ctx_.cmdQ == nullptr){
         ESP_LOGE(TAG, "Failed to create Queue");
         return false;
     }
@@ -67,6 +81,10 @@ bool App::start(){
     if (ctx_.settingsMutex == NULL){
         ESP_LOGE("INIT", "Failed to create settings Mutex");
         return false;
+    }
+
+    if (xTaskCreate(&App::uart_trampoline, "uart", 3072, this, 3, &ctx_.uartHandle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create uart task"); return false;
     }
 
     if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
@@ -423,6 +441,31 @@ void App::ui_task(){
     }
 
     ctx_.uiHandle = nullptr;
+    vTaskDelete(NULL);
+}
+
+void App::uart_trampoline(void* pv){
+    static_cast<App*>(pv)->uart();
+}
+
+void App::uart(){
+    uint8_t ch;
+
+    while(true){
+        if(ctx_.stopRequested) break;
+
+        int n = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(200));
+        
+        //normalize
+        if(n != 1 || ch == '\r' || ch == '\n'){
+            continue;
+        }
+
+        ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
+
+        //TODO: act on 't', 'p', ...
+    }
+
     vTaskDelete(NULL);
 }
 

@@ -15,6 +15,7 @@ struct AppContext{
     QueueHandle_t dataQ = nullptr;
     QueueHandle_t logQueue = nullptr;
     QueueHandle_t buttonQ = nullptr;
+    QueueHandle_t cmdQ = nullptr;
     
     // For restart
     TaskHandle_t loggerHandle;
@@ -23,6 +24,7 @@ struct AppContext{
     TaskHandle_t consumerHandle;
     TaskHandle_t buttonHandle;
     TaskHandle_t uiHandle;
+    TaskHandle_t uartHandle;
 
     // Stop flag
     volatile bool stopRequested = false;
