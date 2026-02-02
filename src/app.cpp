@@ -470,8 +470,18 @@ void App::uart_trampoline(void* pv){
     static_cast<App*>(pv)->uart();
 }
 
+static char* trim(char* s) {
+    // leading
+    while (*s == ' ' || *s == '\t') s++;
+
+    // trailing
+    char* end = s + strlen(s);
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    *end = '\0';
+    return s;
+}
+
 static bool starts_with(const char* s, const char* pref){
-    ESP_LOGI("STARTSW", "s: %s, buf: %s", s, pref);
     while (*pref) { if (*s++ != *pref++) return false; }
     return true;
 }
@@ -493,49 +503,48 @@ void App::uart(){
             continue;
         }
 
+        //enter pressed
         if(ch == '\r' || ch == '\n'){
             if(len == 0) continue;
             const char nl[] = "\r\n";
             uart_write_bytes(UART_NUM_0, nl, 2);
 
             buf[len] = '\0';
+            char* line = trim(buf);
             len = 0;
 
-            // ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
-
-            if(!strcmp(buf, "status")){
+            if(!strcmp(line, "status")){
                 ev.type = CommandType::Status;
             }
-            else if(starts_with(buf, "period ")){
+            else if(starts_with(line, "period ")){
                 char* end = nullptr;
-                unsigned long v = strtoul(buf + 7, &end, 10);
+                unsigned long v = strtoul(line + 7, &end, 10);
 
                 // valid only if we consumed at least 1 digit and ended at string end
-                if (end == (buf + 7) || *end != '\0') {
+                if (end == (line + 7) || *end != '\0') {
                     ok = false;
                 } else {
                     ev.type = CommandType::SetPeriod;
                     ev.value = (uint32_t)v;
                 }
             }
-            else if(!strcmp(buf, "pause toggle")){
+            else if(!strcmp(line, "pause toggle")){
                 ev.type = CommandType::PauseToggle;
             }
-            else if(!strcmp(buf, "pause on")){
+            else if(!strcmp(line, "pause on")){
                 ev.type = CommandType::PauseOn;
             }
-            else if(!strcmp(buf, "pause off")){
+            else if(!strcmp(line, "pause off")){
                 ev.type = CommandType::PauseOff;
             } else{
                 ok = false;
             }
-            ESP_LOGW("UART", "Command sent: '%s'", buf);
 
             if(ok){
                 xQueueSend(ctx_.cmdQ, &ev, 0);
             }
             else{
-                ESP_LOGW("UART", "Unknown command '%s'", buf);
+                ESP_LOGW("UART", "Unknown command '%s'", line);
             }
 
             continue;
@@ -555,7 +564,7 @@ void App::uart(){
 
             if (ch >= 32 && ch <= 126) { // printable ASCII
                 if (len < (int)sizeof(buf) - 1) {
-            buf[len++] = (char)ch;
+                    buf[len++] = (char)ch;
                     uart_write_bytes(UART_NUM_0, (const char*)&ch, 1); // echo
                 } else {
                     ESP_LOGW("UART", "Line too long");
