@@ -536,7 +536,15 @@ void App::uart(){
             }
             else if(!strcmp(line, "pause off")){
                 ev.type = CommandType::PauseOff;
-            } else{
+            } 
+            else if(!strcmp(line, "help")){
+                ESP_LOGI("UART", "Commands:");
+                ESP_LOGI("UART", "  status");
+                ESP_LOGI("UART", "  period <50..10000>");
+                ESP_LOGI("UART", "  pause on|off|toggle");
+                continue; // don’t send to cmdQ
+            }
+            else{
                 ok = false;
             }
 
