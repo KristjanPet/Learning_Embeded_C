@@ -1,5 +1,5 @@
 #include "app.h"
-#include "driver/gpio.h"
+
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -23,7 +23,32 @@ bool App::start(){
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.dataQ = xQueueCreate(POOL_N, sizeof(Sample*));
     ctx_.logQueue = xQueueCreate(10, sizeof(LogEvent));
-    ctx_.buttonQ = xQueueCreate(100, sizeof(ButtonEvent));
+    ctx_.buttonQ = xQueueCreate(10, sizeof(ButtonEvent));
+    ctx_.cmdQ = xQueueCreate(10, sizeof(CommandEvent));
+    ctx_.uiSet = xQueueCreateSet(20);
+
+    if(!ctx_.uiSet){
+        ESP_LOGE(TAG, "Failed to create uiSet");
+        return false;
+    }
+
+    if (xQueueAddToSet(ctx_.buttonQ, ctx_.uiSet) != pdPASS || xQueueAddToSet(ctx_.cmdQ, ctx_.uiSet) != pdPASS) {
+        ESP_LOGE(TAG, "xQueueAddToSet failed");
+        return false;
+    }
+
+    //UART init
+    const uart_port_t UART_NUM = UART_NUM_0;
+
+    uart_config_t uart_cfg{};
+    uart_cfg.baud_rate = 115200;
+    uart_cfg.data_bits = UART_DATA_8_BITS;
+    uart_cfg.parity    = UART_PARITY_DISABLE;
+    uart_cfg.stop_bits = UART_STOP_BITS_1;
+    uart_cfg.flow_ctrl = UART_HW_FLOWCTRL_DISABLE;
+
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM, &uart_cfg));
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM, 2048, 0, 0, nullptr, 0));
 
     //button setup
     gpio_config_t io_conf{};
@@ -50,7 +75,7 @@ bool App::start(){
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));
 
-    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr || ctx_.buttonQ == nullptr){
+    if(ctx_.freeQ == nullptr || ctx_.dataQ == nullptr || ctx_.logQueue == nullptr || ctx_.buttonQ == nullptr || ctx_.cmdQ == nullptr){
         ESP_LOGE(TAG, "Failed to create Queue");
         return false;
     }
@@ -67,6 +92,10 @@ bool App::start(){
     if (ctx_.settingsMutex == NULL){
         ESP_LOGE("INIT", "Failed to create settings Mutex");
         return false;
+    }
+
+    if (xTaskCreate(&App::uart_trampoline, "uart", 3072, this, 3, &ctx_.uartHandle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create uart task"); return false;
     }
 
     if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
@@ -213,8 +242,6 @@ void App::health(){
     uint32_t prev_hb = 0;
     uint8_t stuck_seconds = 0;
 
-    int toggleSendPeriod = 0;
-
     while(1){
         if (ctx_.stopRequested) break;
         uint32_t v = get_dropped_logs();
@@ -237,7 +264,7 @@ void App::health(){
             stuck_seconds = 0;
         }
         
-        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
+        // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -293,7 +320,7 @@ void App::producer(){
 
         //Testing mutex
         xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-        auto p = ctx_.settings.producer_period_ms;
+        uint32_t p = ctx_.settings.producer_period_ms;
         xSemaphoreGive(ctx_.settingsMutex);
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
@@ -383,46 +410,189 @@ void App::ui_trampoline(void* pv){
 
 void App::ui_task(){
     bool led = false;
-    ButtonEvent ev;
-    LogEvent logEvent;
 
     while(true){
         if(ctx_.stopRequested) break;
 
-        if(xQueueReceive(ctx_.buttonQ, &ev, pdMS_TO_TICKS(200)) == pdTRUE){
-            if(ev == ButtonEvent::ShortPress){
-                led = !led;
-                gpio_set_level(GPIO_NUM_2, led);
-                ESP_LOGI("UI", "LED=%d", (int)led);
+        QueueSetMemberHandle_t active = xQueueSelectFromSet(ctx_.uiSet, pdMS_TO_TICKS(200));
 
-                xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-                ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
-                logEvent.count = (int)ctx_.settings.producer_period_ms;
-                xSemaphoreGive(ctx_.settingsMutex);
+        if(active == nullptr) continue;
 
-                logEvent.type = LogType::CHANGED;
-                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
-                    inc_dropped_logs();
-                }  
-                
+        if(active == ctx_.buttonQ){
+            ButtonEvent ev;
+            if(xQueueReceive(ctx_.buttonQ, &ev, 0) == pdTRUE){
+                if(ev == ButtonEvent::ShortPress){
+                    led = !led;
+                    gpio_set_level(GPIO_NUM_2, led);
+                    handle_toggle_period(1000);
+                }
+                else if(ev == ButtonEvent::LongPress){
+                    handle_toggle_pause();
+                }
             }
-            else if(ev == ButtonEvent::LongPress){
-                ctx_.producerPaused = !ctx_.producerPaused;
-
-                logEvent.type = LogType::PAUSED;
-                logEvent.count = ctx_.producerPaused;
-                logEvent.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-                if(xQueueSend(ctx_.logQueue, &logEvent, 0) != pdTRUE){
-                    inc_dropped_logs();
-                }  
+        } 
+        else if(active == ctx_.cmdQ){
+            CommandEvent ce;
+            if(xQueueReceive(ctx_.cmdQ, &ce, 0) == pdTRUE){
+                switch (ce.type)
+                {
+                case CommandType::SetPeriod:
+                    handle_toggle_period(ce.value);
+                    break;
+                case CommandType::PauseToggle:
+                    handle_toggle_pause();
+                    break;
+                case CommandType::PauseOn:
+                    if(!ctx_.producerPaused){
+                        handle_toggle_pause();
+                    }
+                    break;
+                case CommandType::PauseOff:
+                    if(ctx_.producerPaused){
+                        handle_toggle_pause();
+                    }
+                    break;
+                case CommandType::Status:
+                    handle_status();
+                    break;
+                default:
+                    break;
+                }
             }
         }
     }
 
     ctx_.uiHandle = nullptr;
+    vTaskDelete(NULL);
+}
+
+void App::uart_trampoline(void* pv){
+    static_cast<App*>(pv)->uart();
+}
+
+static char* trim(char* s) {
+    // leading
+    while (*s == ' ' || *s == '\t') s++;
+
+    // trailing
+    char* end = s + strlen(s);
+    while (end > s && (end[-1] == ' ' || end[-1] == '\t')) end--;
+    *end = '\0';
+    return s;
+}
+
+static bool starts_with(const char* s, const char* pref){
+    while (*pref) { if (*s++ != *pref++) return false; }
+    return true;
+}
+
+void App::uart(){
+    char buf[64];
+    int len = 0;
+
+    while(true){
+        if(ctx_.stopRequested) break;
+
+        uint8_t ch;
+        CommandEvent ev;
+        bool ok = true;
+        int n = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(200));
+        
+        //normalize
+        if(n != 1){
+            continue;
+        }
+
+        //enter pressed
+        if(ch == '\r' || ch == '\n'){
+            if(len == 0) continue;
+            const char nl[] = "\r\n";
+            uart_write_bytes(UART_NUM_0, nl, 2);
+
+            buf[len] = '\0';
+            char* line = trim(buf);
+            len = 0;
+
+            if(!strcmp(line, "status")){
+                ev.type = CommandType::Status;
+            }
+            else if(starts_with(line, "period ")){
+                char* end = nullptr;
+                unsigned long v = strtoul(line + 7, &end, 10);
+
+                // valid only if we consumed at least 1 digit and ended at string end
+                if (end == (line + 7) || *end != '\0') {
+                    ok = false;
+                } else {
+                    ev.type = CommandType::SetPeriod;
+                    ev.value = (uint32_t)v;
+                }
+            }
+            else if(!strcmp(line, "pause toggle")){
+                ev.type = CommandType::PauseToggle;
+            }
+            else if(!strcmp(line, "pause on")){
+                ev.type = CommandType::PauseOn;
+            }
+            else if(!strcmp(line, "pause off")){
+                ev.type = CommandType::PauseOff;
+            } 
+            else if(!strcmp(line, "help")){
+                ESP_LOGI("UART", "Commands:");
+                ESP_LOGI("UART", "  status");
+                ESP_LOGI("UART", "  period <50..10000>");
+                ESP_LOGI("UART", "  pause on|off|toggle");
+                continue; // don’t send to cmdQ
+            }
+            else{
+                ok = false;
+            }
+
+            if(ok){
+                if(xQueueSend(ctx_.cmdQ, &ev, pdMS_TO_TICKS(50)) != pdTRUE){
+                    ESP_LOGW("UART", "cmdQ full, drop");
+                }
+            }
+            else{
+                ESP_LOGW("UART", "Unknown command '%s'", line);
+            }
+
+
+            const char prompt[] = "> ";
+            uart_write_bytes(UART_NUM_0, prompt, 2);
+            continue;
+        }
+
+        if(len < (int)sizeof(buf) - 1){
+            //write back
+            if (ch == 0x08 || ch == 0x7F) { // backspace keys
+                if (len > 0) {
+                    len--;
+                    // erase last char on terminal: back, space, back
+                    const char bs[] = "\b \b";
+                    uart_write_bytes(UART_NUM_0, bs, 3);
+                }
+                continue;
+            }
+
+            if (ch >= 32 && ch <= 126) { // printable ASCII
+                if (len < (int)sizeof(buf) - 1) {
+                    buf[len++] = (char)ch;
+                    uart_write_bytes(UART_NUM_0, (const char*)&ch, 1); // echo
+                } else {
+                    ESP_LOGW("UART", "Line too long");
+                    len = 0;
+                    const char nl[] = "\r\n";
+                    uart_write_bytes(UART_NUM_0, nl, 2);
+                }
+            }
+        } 
+        else{ //overflow
+            len = 0;
+            ESP_LOGW("UART", "line too long");
+        }
+    }
+
     vTaskDelete(NULL);
 }
 
@@ -437,4 +607,44 @@ uint32_t App::get_dropped_logs() {
     uint32_t v = ctx_.dropped_logs;
     portEXIT_CRITICAL(&ctx_.dropped_logs_mux);
     return v;
+}
+
+void App::handle_status() {
+    uint32_t period;
+    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+    period = ctx_.settings.producer_period_ms;
+    xSemaphoreGive(ctx_.settingsMutex);
+
+    ESP_LOGI("STATUS", "paused=%d period_ms=%u hb=%u dropped=%u",
+             (int)ctx_.producerPaused, (unsigned)period,
+             (unsigned)ctx_.producer_heartbeat,
+             (unsigned)get_dropped_logs());
+}
+
+void App::handle_toggle_period(uint32_t ms) {
+    if(ms < 50 || ms > 10000){
+        ESP_LOGW("UI", "period out of range: %u", (unsigned)ms);
+        return;
+    }
+
+    xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+    ctx_.settings.producer_period_ms = ms;
+    xSemaphoreGive(ctx_.settingsMutex);
+
+    LogEvent le{LogType::CHANGED, (int)ms, (uint32_t)(esp_timer_get_time() / 1000)};
+    if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
+        inc_dropped_logs();
+    }  
+}
+
+void App::handle_toggle_pause() {
+    ctx_.producerPaused = !ctx_.producerPaused;
+
+    LogEvent le{};
+    le.type = LogType::PAUSED;
+    le.count = ctx_.producerPaused ? 1 : 0;
+    le.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
+        inc_dropped_logs();
+    }  
 }
