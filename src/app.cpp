@@ -495,6 +495,9 @@ void App::uart(){
 
         if(ch == '\r' || ch == '\n'){
             if(len == 0) continue;
+            const char nl[] = "\r\n";
+            uart_write_bytes(UART_NUM_0, nl, 2);
+
             buf[len] = '\0';
             len = 0;
 
@@ -539,7 +542,28 @@ void App::uart(){
         }
 
         if(len < (int)sizeof(buf) - 1){
+            //write back
+            if (ch == 0x08 || ch == 0x7F) { // backspace keys
+                if (len > 0) {
+                    len--;
+                    // erase last char on terminal: back, space, back
+                    const char bs[] = "\b \b";
+                    uart_write_bytes(UART_NUM_0, bs, 3);
+                }
+                continue;
+            }
+
+            if (ch >= 32 && ch <= 126) { // printable ASCII
+                if (len < (int)sizeof(buf) - 1) {
             buf[len++] = (char)ch;
+                    uart_write_bytes(UART_NUM_0, (const char*)&ch, 1); // echo
+                } else {
+                    ESP_LOGW("UART", "Line too long");
+                    len = 0;
+                    const char nl[] = "\r\n";
+                    uart_write_bytes(UART_NUM_0, nl, 2);
+                }
+            }
         } 
         else{ //overflow
             len = 0;
