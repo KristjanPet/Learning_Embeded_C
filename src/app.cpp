@@ -549,12 +549,17 @@ void App::uart(){
             }
 
             if(ok){
-                xQueueSend(ctx_.cmdQ, &ev, 0);
+                if(xQueueSend(ctx_.cmdQ, &ev, pdMS_TO_TICKS(50)) != pdTRUE){
+                    ESP_LOGW("UART", "cmdQ full, drop");
+                }
             }
             else{
                 ESP_LOGW("UART", "Unknown command '%s'", line);
             }
 
+
+            const char prompt[] = "> ";
+            uart_write_bytes(UART_NUM_0, prompt, 2);
             continue;
         }
 
