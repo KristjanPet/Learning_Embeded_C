@@ -242,8 +242,6 @@ void App::health(){
     uint32_t prev_hb = 0;
     uint8_t stuck_seconds = 0;
 
-    int toggleSendPeriod = 0;
-
     while(1){
         if (ctx_.stopRequested) break;
         uint32_t v = get_dropped_logs();
@@ -266,7 +264,7 @@ void App::health(){
             stuck_seconds = 0;
         }
         
-        ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
+        // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -322,7 +320,7 @@ void App::producer(){
 
         //Testing mutex
         xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-        auto p = ctx_.settings.producer_period_ms;
+        uint32_t p = ctx_.settings.producer_period_ms;
         xSemaphoreGive(ctx_.settingsMutex);
 
         ESP_ERROR_CHECK(esp_task_wdt_reset());
@@ -412,7 +410,6 @@ void App::ui_trampoline(void* pv){
 
 void App::ui_task(){
     bool led = false;
-    LogEvent logEvent;
 
     while(true){
         if(ctx_.stopRequested) break;
@@ -427,7 +424,7 @@ void App::ui_task(){
                 if(ev == ButtonEvent::ShortPress){
                     led = !led;
                     gpio_set_level(GPIO_NUM_2, led);
-                    handle_toggle_period();
+                    handle_toggle_period(1000);
                 }
                 else if(ev == ButtonEvent::LongPress){
                     handle_toggle_pause();
@@ -435,17 +432,27 @@ void App::ui_task(){
             }
         } 
         else if(active == ctx_.cmdQ){
-            CommandEvent ev;
-            if(xQueueReceive(ctx_.cmdQ, &ev, 0) == pdTRUE){
-                switch (ev)
+            CommandEvent ce;
+            if(xQueueReceive(ctx_.cmdQ, &ce, 0) == pdTRUE){
+                switch (ce.type)
                 {
-                case CommandEvent::TogglePeriod:
-                    handle_toggle_period();
+                case CommandType::SetPeriod:
+                    handle_toggle_period(ce.value);
                     break;
-                case CommandEvent::TogglePause:
+                case CommandType::PauseToggle:
                     handle_toggle_pause();
                     break;
-                case CommandEvent::Status:
+                case CommandType::PauseOn:
+                    if(!ctx_.producerPaused){
+                        handle_toggle_pause();
+                    }
+                    break;
+                case CommandType::PauseOff:
+                    if(ctx_.producerPaused){
+                        handle_toggle_pause();
+                    }
+                    break;
+                case CommandType::Status:
                     handle_status();
                     break;
                 default:
@@ -463,43 +470,80 @@ void App::uart_trampoline(void* pv){
     static_cast<App*>(pv)->uart();
 }
 
+static bool starts_with(const char* s, const char* pref){
+    ESP_LOGI("STARTSW", "s: %s, buf: %s", s, pref);
+    while (*pref) { if (*s++ != *pref++) return false; }
+    return true;
+}
+
 void App::uart(){
-    uint8_t ch;
+    char buf[64];
+    int len = 0;
 
     while(true){
         if(ctx_.stopRequested) break;
 
+        uint8_t ch;
         CommandEvent ev;
         bool ok = true;
         int n = uart_read_bytes(UART_NUM_0, &ch, 1, pdMS_TO_TICKS(200));
         
         //normalize
-        if(n != 1 || ch == '\r' || ch == '\n'){
+        if(n != 1){
             continue;
         }
 
-        // ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
+        if(ch == '\r' || ch == '\n'){
+            if(len == 0) continue;
+            buf[len] = '\0';
+            len = 0;
 
-        switch(ch){
-            case 't':
-                ev = CommandEvent::TogglePeriod;
-                break;
-            case 'p':
-                ev = CommandEvent::TogglePause;
-                break;
-            case 's':
-                ev = CommandEvent::Status;
-                break;
-            default:
+            // ESP_LOGI("UART", "Got: '%c' (0x%02X)", (char)ch, (unsigned)ch);
+
+            if(!strcmp(buf, "status")){
+                ev.type = CommandType::Status;
+            }
+            else if(starts_with(buf, "period ")){
+                char* end = nullptr;
+                unsigned long v = strtoul(buf + 7, &end, 10);
+
+                // valid only if we consumed at least 1 digit and ended at string end
+                if (end == (buf + 7) || *end != '\0') {
+                    ok = false;
+                } else {
+                    ev.type = CommandType::SetPeriod;
+                    ev.value = (uint32_t)v;
+                }
+            }
+            else if(!strcmp(buf, "pause toggle")){
+                ev.type = CommandType::PauseToggle;
+            }
+            else if(!strcmp(buf, "pause on")){
+                ev.type = CommandType::PauseOn;
+            }
+            else if(!strcmp(buf, "pause off")){
+                ev.type = CommandType::PauseOff;
+            } else{
                 ok = false;
-                break;
+            }
+            ESP_LOGW("UART", "Command sent: '%s'", buf);
+
+            if(ok){
+                xQueueSend(ctx_.cmdQ, &ev, 0);
+            }
+            else{
+                ESP_LOGW("UART", "Unknown command '%s'", buf);
+            }
+
+            continue;
         }
 
-        if(ok){
-            xQueueSend(ctx_.cmdQ, &ev, 0);
-        }
-        else{
-            ESP_LOGW("UART", "Unknown command '%c' (use t/p/s)", (char)ch);
+        if(len < (int)sizeof(buf) - 1){
+            buf[len++] = (char)ch;
+        } 
+        else{ //overflow
+            len = 0;
+            ESP_LOGW("UART", "line too long");
         }
     }
 
@@ -531,19 +575,17 @@ void App::handle_status() {
              (unsigned)get_dropped_logs());
 }
 
-void App::handle_toggle_period() {
-    uint32_t newPeriod;
+void App::handle_toggle_period(uint32_t ms) {
+    if(ms < 50 || ms > 10000){
+        ESP_LOGW("UI", "period out of range: %u", (unsigned)ms);
+        return;
+    }
 
     xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
-    ctx_.settings.producer_period_ms = (ctx_.settings.producer_period_ms == 2000) ? 600 : 2000;
-    newPeriod = ctx_.settings.producer_period_ms;
+    ctx_.settings.producer_period_ms = ms;
     xSemaphoreGive(ctx_.settingsMutex);
 
-    LogEvent le{};
-    le.type = LogType::CHANGED;
-    le.count = (int)newPeriod;
-    le.timestamp_ms = (uint32_t)(esp_timer_get_time() / 1000);
-    
+    LogEvent le{LogType::CHANGED, (int)ms, (uint32_t)(esp_timer_get_time() / 1000)};
     if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
         inc_dropped_logs();
     }  

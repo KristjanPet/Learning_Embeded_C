@@ -37,7 +37,7 @@ private:
     uint32_t get_dropped_logs();
 
     void handle_status();
-    void handle_toggle_period();
+    void handle_toggle_period(uint32_t ms);
     void handle_toggle_pause();
 
     AppContext ctx_{};
