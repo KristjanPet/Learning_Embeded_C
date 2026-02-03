@@ -1,5 +1,5 @@
 #include "app.h"
-
+#include "helper.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -70,6 +70,10 @@ bool App::start(){
 
     gpio_set_level(GPIO_NUM_2, 0); // start OFF
 
+    //Init I2C
+    ESP_LOGI(TAG, "i2c init");
+    ESP_ERROR_CHECK(i2c_master_init());
+    i2c_scan();
 
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
@@ -148,19 +152,19 @@ bool App::stop(){
         
     if (ctx_.healthHandle) { //still running, force stop
         ESP_LOGE("APP", "Stop timeout: force-deleting health tasks");
-        esp_task_wdt_delete(ctx_.healthHandle);
+        // esp_task_wdt_delete(ctx_.healthHandle);
         vTaskDelete(ctx_.healthHandle);
         ctx_.healthHandle = nullptr;
     }
     if (ctx_.consumerHandle) {
         ESP_LOGE("APP", "Stop timeout: force-deleting consumer tasks");
-        esp_task_wdt_delete(ctx_.consumerHandle);
+        // esp_task_wdt_delete(ctx_.consumerHandle);
         vTaskDelete(ctx_.consumerHandle);
         ctx_.consumerHandle = nullptr;
     }
     if (ctx_.producerHandle) {
         ESP_LOGE("APP", "Stop timeout: force-deleting producer tasks");
-        esp_task_wdt_delete(ctx_.producerHandle);
+        // esp_task_wdt_delete(ctx_.producerHandle);
         vTaskDelete(ctx_.producerHandle);
         ctx_.producerHandle = nullptr;
     }
@@ -238,7 +242,7 @@ void App::health_trampoline(void *pv){
 }
 
 void App::health(){
-    ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+    // ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
     uint32_t prev_hb = 0;
     uint8_t stuck_seconds = 0;
 
@@ -256,7 +260,7 @@ void App::health(){
         {
             ESP_LOGE("HEALTH", "Producer task stuck, rebooting task now");
             if(ctx_.producerHandle){
-                esp_task_wdt_delete(ctx_.producerHandle);
+                // esp_task_wdt_delete(ctx_.producerHandle);
                 vTaskDelete(ctx_.producerHandle);
                 ctx_.producerHandle = nullptr;
             }
@@ -266,10 +270,10 @@ void App::health(){
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
-        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        // ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
-    esp_task_wdt_delete(NULL);
+    // esp_task_wdt_delete(NULL);
     ctx_.healthHandle = nullptr;
     vTaskDelete(NULL);
 }
@@ -280,7 +284,7 @@ void App::producer_trampoline(void *pv){
 }
 
 void App::producer(){
-    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+    // ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
 
     Sample *p = nullptr;
     while (true){
@@ -288,7 +292,7 @@ void App::producer(){
 
         if(ctx_.producerPaused){
             vTaskDelay(pdMS_TO_TICKS(50));
-            ESP_ERROR_CHECK(esp_task_wdt_reset());
+            // ESP_ERROR_CHECK(esp_task_wdt_reset());
             continue;
         }
 
@@ -323,10 +327,10 @@ void App::producer(){
         uint32_t p = ctx_.settings.producer_period_ms;
         xSemaphoreGive(ctx_.settingsMutex);
 
-        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        // ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(p));
     }
-    esp_task_wdt_delete(NULL);
+    // esp_task_wdt_delete(NULL);
     ctx_.producerHandle = nullptr;
     vTaskDelete(NULL);
 }
@@ -337,7 +341,7 @@ void App::consumer_trampoline(void *pv){
 }
 
 void App::consumer(){
-    ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
+    // ESP_ERROR_CHECK(esp_task_wdt_add(NULL)); //null = current task
 
     Sample* p = nullptr;
     while(1){
@@ -355,9 +359,9 @@ void App::consumer(){
             }
         }
 
-        ESP_ERROR_CHECK(esp_task_wdt_reset());
+        // ESP_ERROR_CHECK(esp_task_wdt_reset());
     }
-    esp_task_wdt_delete(NULL);
+    // esp_task_wdt_delete(NULL);
     ctx_.consumerHandle = nullptr;
     vTaskDelete(NULL);
 }
