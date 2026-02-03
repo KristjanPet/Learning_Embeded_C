@@ -464,6 +464,14 @@ void App::ui_task(){
                 }
             }
         }
+
+        float t, h;
+        esp_err_t e = sht31_read(&t, &h);
+        if (e == ESP_OK) {
+            ESP_LOGI("SHT31", "T=%.2f C  RH=%.1f %%", t, h);
+        } else {
+            ESP_LOGW("SHT31", "read failed: %s", esp_err_to_name(e));
+        }
     }
 
     ctx_.uiHandle = nullptr;
