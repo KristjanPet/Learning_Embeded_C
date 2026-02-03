@@ -73,3 +73,77 @@ esp_err_t sht31_read(float *temp_c, float *rh) {
 
     return ESP_OK;
 }
+
+esp_err_t ssd1306_cmd(uint8_t addr, const uint8_t *cmds, size_t n) {
+    // control byte 0x00 = commands
+    uint8_t buf[32];
+    if (n + 1 > sizeof(buf)) return ESP_ERR_INVALID_SIZE;
+
+    buf[0] = 0x00;
+    for (size_t i = 0; i < n; i++) buf[i + 1] = cmds[i];
+
+    i2c_cmd_handle_t c = i2c_cmd_link_create();
+    i2c_master_start(c);
+    i2c_master_write_byte(c, (addr << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write(c, buf, n + 1, true);
+    i2c_master_stop(c);
+    esp_err_t err = i2c_master_cmd_begin(I2C_NUM_0, c, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(c);
+    return err;
+}
+
+esp_err_t ssd1306_data(uint8_t addr, const uint8_t *data, size_t n) {
+    // control byte 0x40 = data
+    i2c_cmd_handle_t c = i2c_cmd_link_create();
+    i2c_master_start(c);
+    i2c_master_write_byte(c, (addr << 1) | I2C_MASTER_WRITE, true);
+    uint8_t control = 0x40;
+    i2c_master_write(c, &control, 1, true);
+    i2c_master_write(c, data, n, true);
+    i2c_master_stop(c);
+    esp_err_t err = i2c_master_cmd_begin(I2C_NUM_0, c, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(c);
+    return err;
+}
+
+esp_err_t ssd1306_init() {
+    const uint8_t addr = 0x3C;
+    const uint8_t init[] = {
+        0xAE,       // display off
+        0xD5, 0x80, // clock
+        0xA8, 0x3F, // multiplex 1/64
+        0xD3, 0x00, // offset
+        0x40,       // start line
+        0x8D, 0x14, // charge pump
+        0x20, 0x00, // memory mode = horizontal
+        0xA1,       // segment remap
+        0xC8,       // COM scan dec
+        0xDA, 0x12, // COM pins
+        0x81, 0x7F, // contrast
+        0xD9, 0xF1, // precharge
+        0xDB, 0x40, // vcomh
+        0xA4,       // resume RAM
+        0xA6,       // normal display
+        0xAF        // display on
+    };
+    return ssd1306_cmd(addr, init, sizeof(init));
+}
+
+esp_err_t ssd1306_clear() {
+    const uint8_t addr = 0x3C;
+    uint8_t set_addr[] = {
+        0x21, 0x00, 0x7F, // col 0..127
+        0x22, 0x00, 0x07  // page 0..7
+    };
+    ESP_ERROR_CHECK(ssd1306_cmd(addr, set_addr, sizeof(set_addr)));
+
+    static uint8_t oled_zero[128]; // one page row
+    memset(oled_zero, 0, sizeof(oled_zero));
+
+    // 8 pages * 128 bytes
+    for (int page = 0; page < 8; page++) {
+        esp_err_t e = ssd1306_data(addr, oled_zero, sizeof(oled_zero));
+        if (e != ESP_OK) return e;
+    }
+    return ESP_OK;
+}

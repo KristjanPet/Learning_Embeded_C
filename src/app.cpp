@@ -75,6 +75,10 @@ bool App::start(){
     ESP_ERROR_CHECK(i2c_master_init());
     i2c_scan();
 
+    ESP_ERROR_CHECK(ssd1306_init());
+    ESP_ERROR_CHECK(ssd1306_clear());
+    ESP_LOGI("OLED", "init+clear OK");
+
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));
