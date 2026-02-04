@@ -147,3 +147,77 @@ esp_err_t ssd1306_clear() {
     }
     return ESP_OK;
 }
+
+esp_err_t ssd1306_flush() {
+    const uint8_t addr = 0x3C;
+    uint8_t set_addr[] = { 0x21, 0x00, 0x7F, 0x22, 0x00, 0x07 };
+    ESP_ERROR_CHECK(ssd1306_cmd(addr, set_addr, sizeof(set_addr)));
+
+    // Send in chunks of 16..32 bytes is safer on I2C; we'll do 16
+    for (int i = 0; i < (int)sizeof(fb); i += 16) {
+        esp_err_t e = ssd1306_data(addr, &fb[i], 16);
+        if (e != ESP_OK) return e;
+    }
+    return ESP_OK;
+}
+
+static const uint8_t font5x7[][5] = {
+    // ' ' (space)
+    {0x00,0x00,0x00,0x00,0x00},
+    // '%' (we'll use a simple pattern)
+    {0x62,0x64,0x08,0x13,0x23},
+    // '.' 
+    {0x00,0x00,0x60,0x60,0x00},
+    // ':' 
+    {0x00,0x36,0x36,0x00,0x00},
+    // '0'..'9'
+    {0x3E,0x51,0x49,0x45,0x3E}, // 0
+    {0x00,0x42,0x7F,0x40,0x00}, // 1
+    {0x42,0x61,0x51,0x49,0x46}, // 2
+    {0x21,0x41,0x45,0x4B,0x31}, // 3
+    {0x18,0x14,0x12,0x7F,0x10}, // 4
+    {0x27,0x45,0x45,0x45,0x39}, // 5
+    {0x3C,0x4A,0x49,0x49,0x30}, // 6
+    {0x01,0x71,0x09,0x05,0x03}, // 7
+    {0x36,0x49,0x49,0x49,0x36}, // 8
+    {0x06,0x49,0x49,0x29,0x1E}, // 9
+    // 'C'
+    {0x3E,0x41,0x41,0x41,0x22},
+    // 'H'
+    {0x7F,0x08,0x08,0x08,0x7F},
+    // 'T'
+    {0x01,0x01,0x7F,0x01,0x01},
+};
+
+static const uint8_t* glyph(char ch) {
+    if (ch == ' ') return font5x7[0];
+    if (ch == '%') return font5x7[1];
+    if (ch == '.') return font5x7[2];
+    if (ch == ':') return font5x7[3];
+    if (ch >= '0' && ch <= '9') return font5x7[4 + (ch - '0')];
+    if (ch == 'C') return font5x7[14];
+    if (ch == 'H') return font5x7[15];
+    if (ch == 'T') return font5x7[16];
+    return font5x7[0];
+}
+
+static void draw_char(int x, int page, char ch) {
+    if (page < 0 || page > 7) return;
+    if (x < 0 || x > 127) return;
+
+    const uint8_t* g = glyph(ch);
+    int base = page * 128 + x;
+
+    for (int i = 0; i < 5; i++) {
+        if (x + i < 128) fb[base + i] = g[i];
+    }
+    // 1 column spacing
+    if (x + 5 < 128) fb[base + 5] = 0x00;
+}
+
+void draw_text(int x, int page, const char* s) {
+    while (*s && x < 128) {
+        draw_char(x, page, *s++);
+        x += 6;
+    }
+}

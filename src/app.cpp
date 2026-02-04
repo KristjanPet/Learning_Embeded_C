@@ -471,6 +471,15 @@ void App::ui_task(){
 
         float t, h;
         esp_err_t e = sht31_read(&t, &h);
+
+        memset(fb, 0, sizeof(fb));
+
+        char line[32];
+        snprintf(line, sizeof(line), "T:%.1fC H:%.0f%%", t, h);
+
+        draw_text(0, 3, line);
+        ssd1306_flush();
+
         if (e == ESP_OK) {
             ESP_LOGI("SHT31", "T=%.2f C  RH=%.1f %%", t, h);
         } else {
