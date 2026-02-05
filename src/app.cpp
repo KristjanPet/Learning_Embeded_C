@@ -95,6 +95,11 @@ bool App::start(){
         ESP_LOGI("SPL06", "  0x%02X: 0x%02X", 0x10 + i, calib[i]);
     }
 
+    ESP_ERROR_CHECK(spl06_write_reg(0x06, 0x03)); // PRS_CFG: low oversampling
+    ESP_ERROR_CHECK(spl06_write_reg(0x07, 0x83)); // TMP_CFG: low oversampling, internal temp
+    ESP_ERROR_CHECK(spl06_write_reg(0x08, 0x07)); // MEAS_CFG: temp+pressure continuous
+    vTaskDelay(pdMS_TO_TICKS(50));
+
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));
@@ -287,6 +292,18 @@ void App::health(){
             xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle);
             stuck_seconds = 0;
         }
+
+        uint8_t raw[6];
+        ESP_ERROR_CHECK(spl06_read_burst(0x00, raw, 6));
+
+        int32_t p_raw = (int32_t)((raw[0] << 16) | (raw[1] << 8) | raw[2]);
+        int32_t t_raw = (int32_t)((raw[3] << 16) | (raw[4] << 8) | raw[5]);
+
+        // Sign extend 24-bit to 32-bit
+        if (p_raw & 0x800000) p_raw |= 0xFF000000;
+        if (t_raw & 0x800000) t_raw |= 0xFF000000;
+
+        ESP_LOGI("SPL06", "P_raw=%ld  T_raw=%ld", (long)p_raw, (long)t_raw);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 

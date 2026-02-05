@@ -56,3 +56,11 @@ esp_err_t spl06_read_burst(uint8_t start_reg, uint8_t *out, size_t n){
     memcpy(out, &rx[1], n);
     return ESP_OK;
 }
+
+esp_err_t spl06_write_reg(uint8_t reg, uint8_t val){
+    uint8_t tx[2] = { (uint8_t)(reg & 0x7F), val };
+    spi_transaction_t t = {};
+    t.length = 8 * sizeof(tx);
+    t.tx_buffer = tx;
+    return spi_device_transmit(spl06_dev, &t);
+}
