@@ -35,6 +35,17 @@ void i2c_scan(){
     ESP_LOGI("I2C", "Scan done, found=%d", found);
 }
 
+static uint8_t sht31_crc8(const uint8_t * data, int len){
+    uint8_t crc = 0xFF;
+    for (int i = 0; i < len; i++){
+        crc ^= data[i];
+        for (int b = 0; b < 8; b++){
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x31) : (uint8_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
 esp_err_t sht31_read(float *temp_c, float *rh) {
     const uint8_t addr = 0x44;
     // Single shot, high repeatability, clock stretching disabled:
@@ -63,6 +74,13 @@ esp_err_t sht31_read(float *temp_c, float *rh) {
     err = i2c_master_cmd_begin(I2C_NUM_0, r, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(r);
     if (err != ESP_OK) return err;
+
+    uint8_t crcT = sht31_crc8(&data[0], 2); //CRC check
+    uint8_t crcH = sht31_crc8(&data[3], 2);
+
+    if (crcT != data[2] || crcH != data[5]){
+        return ESP_ERR_INVALID_CRC;
+    }
 
     // Convert raw values (ignore CRC for now)
     uint16_t rawT = (uint16_t(data[0]) << 8) | data[1];

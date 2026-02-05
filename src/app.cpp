@@ -482,7 +482,10 @@ void App::ui_task(){
 
         if (e == ESP_OK) {
             ESP_LOGI("SHT31", "T=%.2f C  RH=%.1f %%", t, h);
-        } else {
+        } else if (e == ESP_ERR_INVALID_CRC){
+            ESP_LOGW("SHT31", "CRC error (noise on I2C?)");
+        }
+         else {
             ESP_LOGW("SHT31", "read failed: %s", esp_err_to_name(e));
         }
     }
