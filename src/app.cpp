@@ -87,6 +87,14 @@ bool App::start(){
     ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
     ESP_LOGI("SPL06", "CHIP_ID = 0x%02X", id);
 
+    uint8_t calib[18];
+    ESP_ERROR_CHECK(spl06_read_burst(0x10, calib, sizeof(calib)));
+
+    ESP_LOGI("SPL06", "CALIB:");
+    for (int i = 0; i < (int)sizeof(calib); i++) {
+        ESP_LOGI("SPL06", "  0x%02X: 0x%02X", 0x10 + i, calib[i]);
+    }
+
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
     ESP_ERROR_CHECK(gpio_isr_handler_add(GPIO_NUM_4, gpio_isr_handler, this));

@@ -34,3 +34,25 @@ esp_err_t spl06_read_reg(uint8_t reg, uint8_t *out){
     *out = rx[1]; //first byte is control phase
     return ESP_OK;
 }
+
+esp_err_t spl06_read_burst(uint8_t start_reg, uint8_t *out, size_t n){
+    const size_t total = n + 1;
+
+    uint8_t tx[1 + 32]; // up to 32 bytes burst here
+    uint8_t rx[1 + 32];
+    if (total > sizeof(tx)) return ESP_ERR_INVALID_SIZE;
+
+    tx[0] = (uint8_t)((start_reg & 0x7F) | 0x80);
+    memset(&tx[1], 0x00, n);
+
+    spi_transaction_t t = {};
+    t.length = 8 * total;
+    t.tx_buffer = tx;
+    t.rx_buffer = rx;
+
+    esp_err_t err = spi_device_transmit(spl06_dev, &t);
+    if (err != ESP_OK) return err;
+
+    memcpy(out, &rx[1], n);
+    return ESP_OK;
+}
