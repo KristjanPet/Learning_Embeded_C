@@ -1,4 +1,7 @@
 #include "helper.h"
+#include <rom/ets_sys.h>
+
+static int i2c_fail_count = 0;
 
 esp_err_t i2c_master_init(){
     i2c_config_t conf{};
@@ -35,6 +38,40 @@ void i2c_scan(){
     ESP_LOGI("I2C", "Scan done, found=%d", found);
 }
 
+static void i2c_recover_bus() {
+    // 1) Stop driver
+    i2c_driver_delete(I2C_NUM_0);
+
+    // 2) Bit-bang SCL to release stuck SDA
+    // Configure SDA/SCL as GPIO open-drain-ish outputs temporarily
+    gpio_set_direction(GPIO_NUM_21, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_direction(GPIO_NUM_22, GPIO_MODE_INPUT_OUTPUT_OD);
+    gpio_set_pull_mode(GPIO_NUM_21, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode(GPIO_NUM_22, GPIO_PULLUP_ONLY);
+
+    // Try clocking SCL 9 times (common I2C recovery)
+    for (int i = 0; i < 9; i++) {
+        gpio_set_level(GPIO_NUM_22, 1);
+        ets_delay_us(5);
+        gpio_set_level(GPIO_NUM_22, 0);
+        ets_delay_us(5);
+    }
+
+    // Generate a STOP condition: SDA low->high while SCL high
+    gpio_set_level(GPIO_NUM_21, 0);
+    ets_delay_us(5);
+    gpio_set_level(GPIO_NUM_22, 1);
+    ets_delay_us(5);
+    gpio_set_level(GPIO_NUM_21, 1);
+    ets_delay_us(5);
+
+    // 3) Re-init I2C peripheral
+    ESP_ERROR_CHECK(i2c_master_init());
+
+    // Optional: re-init OLED after recovery (safe)
+    ssd1306_init();
+}
+
 static uint8_t sht31_crc8(const uint8_t * data, int len){
     uint8_t crc = 0xFF;
     for (int i = 0; i < len; i++){
@@ -51,6 +88,12 @@ esp_err_t sht31_read(float *temp_c, float *rh) {
     // Single shot, high repeatability, clock stretching disabled:
     const uint8_t cmd[2] = { 0x24, 0x00 };
 
+    if (i2c_fail_count >= 3){
+        ESP_LOGW("I2C", "Too many failures, recovering bus...");
+        i2c_recover_bus();
+        i2c_fail_count = 0;
+    }
+
     // Write command
     i2c_cmd_handle_t w = i2c_cmd_link_create();
     i2c_master_start(w);
@@ -59,7 +102,10 @@ esp_err_t sht31_read(float *temp_c, float *rh) {
     i2c_master_stop(w);
     esp_err_t err = i2c_master_cmd_begin(I2C_NUM_0, w, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(w);
-    if (err != ESP_OK) return err;
+    if (err != ESP_OK){
+        i2c_fail_count++;       
+        return err;
+    }
 
     vTaskDelay(pdMS_TO_TICKS(20)); // measurement time
 
@@ -73,7 +119,12 @@ esp_err_t sht31_read(float *temp_c, float *rh) {
     i2c_master_stop(r);
     err = i2c_master_cmd_begin(I2C_NUM_0, r, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(r);
-    if (err != ESP_OK) return err;
+
+    if (err != ESP_OK){
+        i2c_fail_count++;
+        return err;
+    }
+    i2c_fail_count = 0;
 
     uint8_t crcT = sht31_crc8(&data[0], 2); //CRC check
     uint8_t crcH = sht31_crc8(&data[3], 2);
