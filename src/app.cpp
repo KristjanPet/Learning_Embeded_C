@@ -1,5 +1,6 @@
 #include "app.h"
-#include "helper.h"
+#include "i2c_helper.h"
+#include "spi_helper.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -78,6 +79,13 @@ bool App::start(){
     ESP_ERROR_CHECK(ssd1306_init());
     ESP_ERROR_CHECK(ssd1306_clear());
     ESP_LOGI("OLED", "init+clear OK");
+
+    //init SPI
+    ESP_ERROR_CHECK(spl06_spi_init());
+
+    uint8_t id = 0;
+    ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
+    ESP_LOGI("SPL06", "CHIP_ID = 0x%02X", id);
 
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
