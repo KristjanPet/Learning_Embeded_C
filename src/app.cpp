@@ -89,16 +89,18 @@ bool App::start(){
 
     uint8_t calib[18];
     ESP_ERROR_CHECK(spl06_read_burst(0x10, calib, sizeof(calib)));
-
-    ESP_LOGI("SPL06", "CALIB:");
-    for (int i = 0; i < (int)sizeof(calib); i++) {
-        ESP_LOGI("SPL06", "  0x%02X: 0x%02X", 0x10 + i, calib[i]);
-    }
+    spl06_parse_calib(calib, &spl_cal);
 
     ESP_ERROR_CHECK(spl06_write_reg(0x06, 0x03)); // PRS_CFG: low oversampling
     ESP_ERROR_CHECK(spl06_write_reg(0x07, 0x83)); // TMP_CFG: low oversampling, internal temp
     ESP_ERROR_CHECK(spl06_write_reg(0x08, 0x07)); // MEAS_CFG: temp+pressure continuous
     vTaskDelay(pdMS_TO_TICKS(50));
+
+    ESP_LOGI("SPL06", "c0=%ld c1=%ld", (long)spl_cal.c0, (long)spl_cal.c1);
+    ESP_LOGI("SPL06", "c00=%ld c10=%ld", (long)spl_cal.c00, (long)spl_cal.c10);
+    ESP_LOGI("SPL06", "c01=%ld c11=%ld c20=%ld c21=%ld c30=%ld",
+            (long)spl_cal.c01, (long)spl_cal.c11, (long)spl_cal.c20,
+            (long)spl_cal.c21, (long)spl_cal.c30);
 
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
@@ -293,7 +295,10 @@ void App::health(){
             stuck_seconds = 0;
         }
 
+        //SPL06 read
         uint8_t raw[6];
+        uint8_t prs_cfg = 0x03;
+        uint8_t tmp_cfg = 0x83;
         ESP_ERROR_CHECK(spl06_read_burst(0x00, raw, 6));
 
         int32_t p_raw = (int32_t)((raw[0] << 16) | (raw[1] << 8) | raw[2]);
@@ -303,7 +308,11 @@ void App::health(){
         if (p_raw & 0x800000) p_raw |= 0xFF000000;
         if (t_raw & 0x800000) t_raw |= 0xFF000000;
 
+        float tc = 0, pa = 0;
+        spl06_compensate(p_raw, t_raw, prs_cfg, tmp_cfg, &tc, &pa);
+
         ESP_LOGI("SPL06", "P_raw=%ld  T_raw=%ld", (long)p_raw, (long)t_raw);
+        ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa", tc, pa / 100.0f);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
