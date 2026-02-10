@@ -44,8 +44,8 @@ esp_err_t spl06_read_burst(uint8_t start_reg, uint8_t *out, size_t n){
     uint8_t rx[1 + 32];
     if (total > sizeof(tx)) return ESP_ERR_INVALID_SIZE;
 
-    tx[0] = (uint8_t)((start_reg & 0x7F) | 0x80);
-    memset(&tx[1], 0x00, n);
+    tx[0] = (uint8_t)((start_reg & 0x7F) | 0x80);   //reg & 0x7F clears bit7 (forces it 0), | 0x80 sets bit7 to 1 
+    memset(&tx[1], 0x00, n);                        //bit7 = 1 → READ, bit7 = 0 → WRITE
 
     spi_transaction_t t = {};
     t.length = 8 * total;
@@ -67,9 +67,9 @@ esp_err_t spl06_write_reg(uint8_t reg, uint8_t val){
     return spi_device_transmit(spl06_dev, &t);
 }
 
-static int32_t sign_extend(int32_t v, int bits) {
-    const int32_t shift = 32 - bits;
-    return (v << shift) >> shift;
+static int32_t sign_extend(int32_t v, int bits) { // converts a value with given bits (e.g. 12 or 20) to a proper signed 32-bit integer
+    const int32_t shift = 32 - bits;    // if bits=12, shift=20; if bits=20, shift=12
+    return (v << shift) >> shift;       // first bit defines the sign, so move it to the leftmost position, then move back to the right, filling with the sign bit on the left
 }
 
 void spl06_parse_calib(const uint8_t b[18], Spl06Cal *c){
@@ -80,7 +80,7 @@ void spl06_parse_calib(const uint8_t b[18], Spl06Cal *c){
     c->c1 = sign_extend(c1, 12);
 
     // c00, c10 are 20-bit signed
-    int32_t c00 = (int32_t)((b[3] << 12) | (b[4] << 4) | (b[5] >> 4));
+    int32_t c00 = (int32_t)((b[3] << 12) | (b[4] << 4) | (b[5] >> 4)); //combines together byte 3 (8 bits moved to the front), byte 4 (8 bits in the middle), and the first 4 bits of byte 5
     int32_t c10 = (int32_t)(((b[5] & 0x0F) << 16) | (b[6] << 8) | b[7]);
     c->c00 = sign_extend(c00, 20);
     c->c10 = sign_extend(c10, 20);
