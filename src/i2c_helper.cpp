@@ -1,4 +1,4 @@
-#include "helper.h"
+#include "i2c_helper.h"
 #include <rom/ets_sys.h>
 
 static int i2c_fail_count = 0;

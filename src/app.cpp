@@ -1,5 +1,6 @@
 #include "app.h"
-#include "helper.h"
+#include "i2c_helper.h"
+#include "spi_helper.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -18,6 +19,7 @@ static const char *TAG = "APP";
 bool App::start(){
     ctx_.dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
     ctx_.settings.producer_period_ms = 2000;
+    ctx_.settings.sea_level_hpa = 1013.25f;
     ctx_.stopRequested = false;
 
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
@@ -78,6 +80,28 @@ bool App::start(){
     ESP_ERROR_CHECK(ssd1306_init());
     ESP_ERROR_CHECK(ssd1306_clear());
     ESP_LOGI("OLED", "init+clear OK");
+
+    //init SPI
+    ESP_ERROR_CHECK(spl06_spi_init());
+
+    uint8_t id = 0;
+    ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
+    ESP_LOGI("SPL06", "CHIP_ID = 0x%02X", id);
+
+    uint8_t calib[18];
+    ESP_ERROR_CHECK(spl06_read_burst(0x10, calib, sizeof(calib)));
+    spl06_parse_calib(calib, &spl_cal);
+
+    ESP_ERROR_CHECK(spl06_write_reg(0x06, 0x03)); // PRS_CFG: low oversampling
+    ESP_ERROR_CHECK(spl06_write_reg(0x07, 0x83)); // TMP_CFG: low oversampling, internal temp
+    ESP_ERROR_CHECK(spl06_write_reg(0x08, 0x07)); // MEAS_CFG: temp+pressure continuous
+    vTaskDelay(pdMS_TO_TICKS(50));
+
+    ESP_LOGI("SPL06", "c0=%ld c1=%ld", (long)spl_cal.c0, (long)spl_cal.c1);
+    ESP_LOGI("SPL06", "c00=%ld c10=%ld", (long)spl_cal.c00, (long)spl_cal.c10);
+    ESP_LOGI("SPL06", "c01=%ld c11=%ld c20=%ld c21=%ld c30=%ld",
+            (long)spl_cal.c01, (long)spl_cal.c11, (long)spl_cal.c20,
+            (long)spl_cal.c21, (long)spl_cal.c30);
 
     //intall and register ISR
     ESP_ERROR_CHECK(gpio_install_isr_service(0));
@@ -271,6 +295,32 @@ void App::health(){
             xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle);
             stuck_seconds = 0;
         }
+
+        //SPL06 read
+        uint8_t raw[6];
+        uint8_t prs_cfg = 0x03;
+        uint8_t tmp_cfg = 0x83;
+        ESP_ERROR_CHECK(spl06_read_burst(0x00, raw, 6));
+
+        int32_t p_raw = (int32_t)((raw[0] << 16) | (raw[1] << 8) | raw[2]);
+        int32_t t_raw = (int32_t)((raw[3] << 16) | (raw[4] << 8) | raw[5]);
+
+        // Sign extend 24-bit to 32-bit
+        if (p_raw & 0x800000) p_raw |= 0xFF000000;
+        if (t_raw & 0x800000) t_raw |= 0xFF000000;
+
+        float tc = 0, pa = 0;
+        spl06_compensate(p_raw, t_raw, prs_cfg, tmp_cfg, &tc, &pa);
+
+        float p_hpa = pa / 100.0f;
+
+        xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+        float p0 = ctx_.settings.sea_level_hpa;
+        xSemaphoreGive(ctx_.settingsMutex);
+
+        float alt_m = altitude_from_hpa(p_hpa, p0);
+
+        ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 

@@ -8,6 +8,7 @@
 
 struct Settings {
     uint32_t producer_period_ms;
+    float sea_level_hpa;   // P0
 };
 
 struct AppContext{
