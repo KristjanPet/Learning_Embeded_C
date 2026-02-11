@@ -2,6 +2,7 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
+#include <cmath>
 
 struct Spl06Cal {
     int32_t c0, c1;
@@ -26,3 +27,5 @@ void spl06_parse_calib(const uint8_t b[18], Spl06Cal *c);
 void spl06_compensate(int32_t p_raw, int32_t t_raw,
                              uint8_t prs_cfg, uint8_t tmp_cfg,
                              float *temp_c, float *press_pa);
+
+float altitude_from_hpa(float p_hpa, float p0_hpa);

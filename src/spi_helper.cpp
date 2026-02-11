@@ -129,3 +129,12 @@ void spl06_compensate(int32_t p_raw, int32_t t_raw,
 
     *press_pa = P; // in Pa (per formula)
 }
+
+float altitude_from_hpa(float p_hpa, float p0_hpa)
+{
+    // avoid divide-by-zero / nonsense
+    if (p0_hpa <= 0.0f || p_hpa <= 0.0f) return 0.0f;
+
+    const float ratio = p_hpa / p0_hpa;
+    return 44330.0f * (1.0f - powf(ratio, 0.1903f));
+}

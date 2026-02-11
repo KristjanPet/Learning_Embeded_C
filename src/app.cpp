@@ -19,6 +19,7 @@ static const char *TAG = "APP";
 bool App::start(){
     ctx_.dropped_logs_mux = portMUX_INITIALIZER_UNLOCKED;
     ctx_.settings.producer_period_ms = 2000;
+    ctx_.settings.sea_level_hpa = 1013.25f;
     ctx_.stopRequested = false;
 
     ctx_.freeQ = xQueueCreate(POOL_N, sizeof(Sample*));
@@ -311,8 +312,15 @@ void App::health(){
         float tc = 0, pa = 0;
         spl06_compensate(p_raw, t_raw, prs_cfg, tmp_cfg, &tc, &pa);
 
-        ESP_LOGI("SPL06", "P_raw=%ld  T_raw=%ld", (long)p_raw, (long)t_raw);
-        ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa", tc, pa / 100.0f);
+        float p_hpa = pa / 100.0f;
+
+        xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
+        float p0 = ctx_.settings.sea_level_hpa;
+        xSemaphoreGive(ctx_.settingsMutex);
+
+        float alt_m = altitude_from_hpa(p_hpa, p0);
+
+        ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
