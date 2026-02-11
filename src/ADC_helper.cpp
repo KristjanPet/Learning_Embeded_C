@@ -18,6 +18,12 @@ void adc_init(){
 
 }
 
+static int to_percent(int raw){
+    if (raw < 0) raw = 0;
+    if (raw > 4095) raw = 4095;
+    return (raw * 100) / 4095;
+}
+
 void adc_task(){
     int raw = 0;
     ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw));
@@ -30,6 +36,7 @@ void adc_task(){
             ESP_LOGI(TAG_ADC, "raw=%d  (mv conv failed)", raw);
         }
     } else {
-        ESP_LOGI(TAG_ADC, "raw=%d", raw);
+        int percent = to_percent(raw);
+        ESP_LOGI(TAG_ADC, "raw=%d, percent=%d%%", raw, percent);
     }
 }
