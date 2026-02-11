@@ -1,6 +1,7 @@
 #include "app.h"
 #include "i2c_helper.h"
 #include "spi_helper.h"
+#include "ADC_helper.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -38,6 +39,9 @@ bool App::start(){
         ESP_LOGE(TAG, "xQueueAddToSet failed");
         return false;
     }
+
+    //ADC init
+    adc_init();
 
     //UART init
     const uart_port_t UART_NUM = UART_NUM_0;
@@ -323,6 +327,9 @@ void App::health(){
         ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
+
+        //ADC
+        adc_task();
 
         // ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));

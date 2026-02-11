@@ -8,6 +8,9 @@
 #include "app_context.h"
 #include "app_types.h"
 
+
+#define ADC_CH  ADC_CHANNEL_6
+
 class App{
 public:
     bool start();
