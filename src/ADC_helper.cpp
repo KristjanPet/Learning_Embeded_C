@@ -25,6 +25,7 @@ static int to_percent(int raw){
 }
 
 void adc_task(){
+
     int raw = 0;
     ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, ADC_CHANNEL_6, &raw));
 

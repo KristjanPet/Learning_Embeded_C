@@ -143,23 +143,28 @@ bool App::start(){
         return false;
     }
 
-    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create health task");
-        return false;
-    }
+    // if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create health task");
+    //     return false;
+    // }
 
-    if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create logger task");
-        return false;
-    }
+    // if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create logger task");
+    //     return false;
+    // }
 
-    if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create producer task");
-        return false;
-    }
+    // if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create producer task");
+    //     return false;
+    // }
 
-    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create consumer task");
+    // if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create consumer task");
+    //     return false;
+    // }
+
+    if (xTaskCreate(&App::adc_trampoline, "ADC", 2048, this, 4, &ctx_.adcHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create ADC task");
         return false;
     }
 
@@ -327,9 +332,6 @@ void App::health(){
         ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
-
-        //ADC
-        adc_task();
 
         // ESP_ERROR_CHECK(esp_task_wdt_reset());
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -679,6 +681,18 @@ void App::uart(){
     }
 
     vTaskDelete(NULL);
+}
+
+void App::adc_trampoline(void* pv){
+    static_cast<App*>(pv)->adc();
+}
+
+void App::adc(){
+
+    while(true){
+        adc_task();
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
 }
 
 void App::inc_dropped_logs(){

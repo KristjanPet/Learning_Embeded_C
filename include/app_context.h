@@ -27,6 +27,7 @@ struct AppContext{
     TaskHandle_t buttonHandle;
     TaskHandle_t uiHandle;
     TaskHandle_t uartHandle;
+    TaskHandle_t adcHandle;
 
     // Stop flag
     volatile bool stopRequested = false;
