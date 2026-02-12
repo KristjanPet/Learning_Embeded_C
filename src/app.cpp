@@ -134,9 +134,9 @@ bool App::start(){
         ESP_LOGE(TAG, "Failed to create uart task"); return false;
     }
 
-    if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create ui task"); return false;
-    }
+    // if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create ui task"); return false;
+    // }
 
     if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create button task");
@@ -163,7 +163,7 @@ bool App::start(){
     //     return false;
     // }
 
-    if (xTaskCreate(&App::adc_trampoline, "ADC", 2048, this, 4, &ctx_.adcHandle) != pdPASS){
+    if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
         ESP_LOGE(TAG, "Failed to create ADC task");
         return false;
     }
@@ -688,11 +688,7 @@ void App::adc_trampoline(void* pv){
 }
 
 void App::adc(){
-
-    while(true){
-        adc_task();
-        vTaskDelay(pdMS_TO_TICKS(200));
-    }
+    adc_task();
 }
 
 void App::inc_dropped_logs(){
