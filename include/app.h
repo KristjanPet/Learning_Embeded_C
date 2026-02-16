@@ -8,6 +8,9 @@
 #include "app_context.h"
 #include "app_types.h"
 
+
+#define ADC_CH  ADC_CHANNEL_6
+
 class App{
 public:
     bool start();
@@ -24,6 +27,7 @@ private:
     static void button_trampoline(void* pv);
     static void ui_trampoline(void* pv);
     static void uart_trampoline(void* pv);
+    static void adc_trampoline(void* pv);
 
     void producer();
     void consumer();
@@ -32,6 +36,7 @@ private:
     void button();
     void ui_task();
     void uart();
+    void adc();
 
     void inc_dropped_logs();
     uint32_t get_dropped_logs();

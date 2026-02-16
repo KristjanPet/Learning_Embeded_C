@@ -1,6 +1,7 @@
 #include "app.h"
 #include "i2c_helper.h"
 #include "spi_helper.h"
+#include "ADC_helper.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -38,6 +39,9 @@ bool App::start(){
         ESP_LOGE(TAG, "xQueueAddToSet failed");
         return false;
     }
+
+    //ADC init
+    adc_init();
 
     //UART init
     const uart_port_t UART_NUM = UART_NUM_0;
@@ -130,32 +134,37 @@ bool App::start(){
         ESP_LOGE(TAG, "Failed to create uart task"); return false;
     }
 
-    if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create ui task"); return false;
-    }
+    // if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
+    //     ESP_LOGE(TAG, "Failed to create ui task"); return false;
+    // }
 
     if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create button task");
         return false;
     }
 
-    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create health task");
-        return false;
-    }
+    // if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create health task");
+    //     return false;
+    // }
 
-    if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create logger task");
-        return false;
-    }
+    // if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create logger task");
+    //     return false;
+    // }
 
-    if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create producer task");
-        return false;
-    }
+    // if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create producer task");
+    //     return false;
+    // }
 
-    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create consumer task");
+    // if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create consumer task");
+    //     return false;
+    // }
+
+    if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create ADC task");
         return false;
     }
 
@@ -672,6 +681,14 @@ void App::uart(){
     }
 
     vTaskDelete(NULL);
+}
+
+void App::adc_trampoline(void* pv){
+    static_cast<App*>(pv)->adc();
+}
+
+void App::adc(){
+    adc_task();
 }
 
 void App::inc_dropped_logs(){
