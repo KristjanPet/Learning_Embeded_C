@@ -153,9 +153,9 @@ bool App::start(){
         ESP_LOGE(TAG, "Failed to create uart task"); return false;
     }
 
-    // if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create ui task"); return false;
-    // }
+    if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create ui task"); return false;
+    }
 
     if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create button task");
@@ -182,10 +182,10 @@ bool App::start(){
         return false;
     }
 
-    if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create ADC task");
-        return false;
-    }
+    // if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create ADC task");
+    //     return false;
+    // }
 
     return true;
 }
@@ -357,7 +357,7 @@ void App::health(){
 
         float alt_m = altitude_from_hpa(p_hpa, p0);
 
-        ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
+        // ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
