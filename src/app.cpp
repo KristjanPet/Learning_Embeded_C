@@ -223,6 +223,11 @@ bool App::stop(){
         // esp_task_wdt_delete(ctx_.producerHandle);
         vTaskDelete(ctx_.producerHandle);
         ctx_.producerHandle = nullptr;
+        if(ctx_.producerTimer){
+            xTimerStop(ctx_.producerTimer, 0);
+            xTimerDelete(ctx_.producerTimer, 0);
+            ctx_.producerTimer = nullptr;
+        }
     }
     if (ctx_.loggerHandle) {
         ESP_LOGE("APP", "Stop timeout: force-deleting logger tasks");
