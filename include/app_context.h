@@ -28,6 +28,9 @@ struct AppContext{
     TaskHandle_t uiHandle;
     TaskHandle_t uartHandle;
 
+    //software timer
+    TimerHandle_t producerTimer;
+
     // Stop flag
     volatile bool stopRequested = false;
     volatile bool producerPaused = false;

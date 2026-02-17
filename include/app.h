@@ -28,6 +28,7 @@ private:
     static void ui_trampoline(void* pv);
     static void uart_trampoline(void* pv);
     static void adc_trampoline(void* pv);
+    static void producer_timer_cb(TimerHandle_t xTimer);
 
     void producer();
     void consumer();
