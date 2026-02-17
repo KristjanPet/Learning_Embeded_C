@@ -199,13 +199,17 @@ bool App::stop(){
     xQueueSend(ctx_.freeQ, &poison, 0);
     xQueueSend(ctx_.logQueue, &logPoison, 0);
 
+    if(ctx_.producerHandle){
+        xTaskNotifyGive(ctx_.producerHandle);
+    }
+
     const TickType_t start = xTaskGetTickCount();
 
     while ((ctx_.producerHandle || ctx_.consumerHandle || ctx_.healthHandle || ctx_.loggerHandle) && (xTaskGetTickCount() - start < pdMS_TO_TICKS(2000)))
     {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-        
+       
     if (ctx_.healthHandle) { //still running, force stop
         ESP_LOGE("APP", "Stop timeout: force-deleting health tasks");
         // esp_task_wdt_delete(ctx_.healthHandle);
@@ -417,7 +421,7 @@ void App::producer(){
         xSemaphoreGive(ctx_.settingsMutex);
 
         // ESP_ERROR_CHECK(esp_task_wdt_reset());
-        vTaskDelay(pdMS_TO_TICKS(p));
+        // vTaskDelay(pdMS_TO_TICKS(p));
     }
     // esp_task_wdt_delete(NULL);
     ctx_.producerHandle = nullptr;
