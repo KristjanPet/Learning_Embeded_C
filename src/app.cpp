@@ -40,6 +40,25 @@ bool App::start(){
         return false;
     }
 
+    //Software timer
+    ctx_.producerTimer = xTimerCreate(
+        "prod_tmr",
+        pdMS_TO_TICKS(ctx_.settings.producer_period_ms),
+        pdTRUE, //auto reload
+        this, //timer ID = App*
+        producer_timer_cb
+    );
+
+    if(!ctx_.producerTimer){
+        ESP_LOGE(TAG, "Failed to create producer timer");
+        return false;
+    }
+
+    if(xTimerStart(ctx_.producerTimer, 0) != pdPASS){
+        ESP_LOGE(TAG, "Failed to start producer timer");
+        return false;
+    }
+
     //ADC init
     adc_init();
 
@@ -143,25 +162,25 @@ bool App::start(){
         return false;
     }
 
-    // if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create health task");
-    //     return false;
-    // }
+    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create health task");
+        return false;
+    }
 
-    // if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create logger task");
-    //     return false;
-    // }
+    if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create logger task");
+        return false;
+    }
 
-    // if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create producer task");
-    //     return false;
-    // }
+    if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create producer task");
+        return false;
+    }
 
-    // if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create consumer task");
-    //     return false;
-    // }
+    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create consumer task");
+        return false;
+    }
 
     if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
         ESP_LOGE(TAG, "Failed to create ADC task");
@@ -358,6 +377,8 @@ void App::producer(){
             // ESP_ERROR_CHECK(esp_task_wdt_reset());
             continue;
         }
+
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //waiting for timer ping
 
         if (xQueueReceive(ctx_.freeQ, &p, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
@@ -691,6 +712,15 @@ void App::adc(){
     adc_task();
 }
 
+void App::producer_timer_cb(TimerHandle_t xTimer){
+    auto *self = static_cast<App*>(pvTimerGetTimerID(xTimer)); //stores this in timer ID
+    if (!self) return;
+
+    if(self->ctx_.producerHandle){
+        xTaskNotifyGive(self->ctx_.producerHandle);
+    }
+}
+
 void App::inc_dropped_logs(){
     portENTER_CRITICAL(&ctx_.dropped_logs_mux);
     ctx_.dropped_logs++;
@@ -725,6 +755,8 @@ void App::handle_toggle_period(uint32_t ms) {
     xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
     ctx_.settings.producer_period_ms = ms;
     xSemaphoreGive(ctx_.settingsMutex);
+
+    xTimerChangePeriod(ctx_.producerTimer, pdMS_TO_TICKS(ms), 0);
 
     LogEvent le{LogType::CHANGED, (int)ms, (uint32_t)(esp_timer_get_time() / 1000)};
     if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
