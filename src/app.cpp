@@ -767,6 +767,32 @@ bool App::sd_mount(){
     return true;
 }
 
+void App::sd_test(){
+
+    FILE* f = fopen("/sdcard/log.txt", "a");
+    if(!f){
+        ESP_LOGE("SD", "open write failed");
+        return;
+    }
+
+    fprintf(f, "Hello from ESP32 (SPI SD)\n");
+    fclose(f);
+
+    f = fopen("/sdcard/log.txt", "r");
+    if(!f){
+        ESP_LOGE("SD", "open read failed");
+        return;
+    }
+
+    char line[128];
+    ESP_LOGI("SD", "---------- log.txt -------------");
+    while(fgets(line, sizeof(line), f)){
+        line[strcspn(line, "\r\n")] = 0;
+        ESP_LOGI("SD", "%s", line);
+    }
+    fclose(f);
+}
+
 void App::producer_timer_cb(TimerHandle_t xTimer){
     auto *self = static_cast<App*>(pvTimerGetTimerID(xTimer)); //stores this in timer ID
     if (!self) return;
