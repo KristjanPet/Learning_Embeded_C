@@ -45,6 +45,7 @@ private:
     bool spi_init_once();
     bool sd_mount();
     void sd_test();
+    void force_spi_cs_high();
 
     void inc_dropped_logs();
     uint32_t get_dropped_logs();

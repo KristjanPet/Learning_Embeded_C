@@ -10,7 +10,7 @@ esp_err_t spl06_spi_init(){
     devcfg.spics_io_num = GPIO_NUM_5;          // CSB
     devcfg.queue_size = 1;
 
-    return spi_bus_add_device(VSPI_HOST, &devcfg, &spl06_dev);
+    return spi_bus_add_device(SPI3_HOST, &devcfg, &spl06_dev);
 }
 
 esp_err_t spl06_read_reg(uint8_t reg, uint8_t *out){

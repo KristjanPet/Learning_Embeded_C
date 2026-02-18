@@ -105,7 +105,13 @@ bool App::start(){
     ESP_LOGI("OLED", "init+clear OK");
 
     //init SPI
+    if(!spi_init_once()) return false;
+    force_spi_cs_high();
+
     ESP_ERROR_CHECK(spl06_spi_init());
+
+    if(!sd_mount()) return false;
+    sd_test();
 
     uint8_t id = 0;
     ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
@@ -730,7 +736,7 @@ bool App::spi_init_once()
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
 
-    esp_err_t err = spi_bus_initialize(VSPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+    esp_err_t err = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
 
     // If already initialized, allow it.
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
@@ -738,6 +744,18 @@ bool App::spi_init_once()
         return false;
     }
     return true;
+}
+
+void App::force_spi_cs_high()
+{
+    gpio_config_t cfg{};
+    cfg.mode = GPIO_MODE_OUTPUT;
+    cfg.pin_bit_mask = (1ULL << GPIO_NUM_5) | (1ULL << GPIO_NUM_17); // SPL06_CS + SD_CS
+    cfg.pull_up_en = GPIO_PULLUP_ENABLE;
+    ESP_ERROR_CHECK(gpio_config(&cfg));
+
+    gpio_set_level(GPIO_NUM_5, 1);   // SPL06 deselect
+    gpio_set_level(GPIO_NUM_17, 1);  // SD deselect
 }
 
 bool App::sd_mount(){
@@ -751,10 +769,11 @@ bool App::sd_mount(){
     sdmmc_card_t* card = nullptr;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = VSPI_HOST;
+    host.slot = SPI3_HOST;
+    host.max_freq_khz = 1000;
 
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_cfg.host_id = VSPI_HOST;
+    slot_cfg.host_id = SPI3_HOST;
     slot_cfg.gpio_cs = GPIO_NUM_17;   // SD CS
 
     esp_err_t ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_cfg, &mount_cfg, &card);
