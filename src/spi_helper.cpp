@@ -3,14 +3,6 @@
 Spl06Cal spl_cal;
 
 esp_err_t spl06_spi_init(){
-    spi_bus_config_t buscfg = {};
-    buscfg.mosi_io_num = GPIO_NUM_23;
-    buscfg.miso_io_num = GPIO_NUM_19;
-    buscfg.sclk_io_num = GPIO_NUM_18;
-    buscfg.quadwp_io_num = -1;
-    buscfg.quadhd_io_num = -1;
-
-    ESP_ERROR_CHECK(spi_bus_initialize(VSPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
 
     spi_device_interface_config_t devcfg = {};
     devcfg.clock_speed_hz = 1 * 1000 * 1000;   // 1 MHz safe start

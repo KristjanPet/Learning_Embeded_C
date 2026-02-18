@@ -721,6 +721,52 @@ void App::adc(){
     adc_task();
 }
 
+bool App::spi_init_once()
+{
+    spi_bus_config_t buscfg = {};
+    buscfg.mosi_io_num = GPIO_NUM_23;
+    buscfg.miso_io_num = GPIO_NUM_19;
+    buscfg.sclk_io_num = GPIO_NUM_18;
+    buscfg.quadwp_io_num = -1;
+    buscfg.quadhd_io_num = -1;
+
+    esp_err_t err = spi_bus_initialize(VSPI_HOST, &buscfg, SPI_DMA_CH_AUTO);
+
+    // If already initialized, allow it.
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE("SPI", "spi_bus_initialize failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+bool App::sd_mount(){
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    sdmmc_card_t* card = nullptr;
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = VSPI_HOST;
+
+    sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_cfg.host_id = VSPI_HOST;
+    slot_cfg.gpio_cs = GPIO_NUM_17;   // SD CS
+
+    esp_err_t ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_cfg, &mount_cfg, &card);
+    if (ret != ESP_OK) {
+        ESP_LOGE("SD", "mount failed: %s", esp_err_to_name(ret));
+        return false;
+    }
+
+    sdmmc_card_print_info(stdout, card);
+    return true;
+}
+
 void App::producer_timer_cb(TimerHandle_t xTimer){
     auto *self = static_cast<App*>(pvTimerGetTimerID(xTimer)); //stores this in timer ID
     if (!self) return;

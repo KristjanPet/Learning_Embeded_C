@@ -7,6 +7,9 @@
 #include "esp_vfs_dev.h"
 #include "app_context.h"
 #include "app_types.h"
+#include "esp_vfs_fat.h"
+#include "sdmmc_cmd.h"
+#include "driver/sdspi_host.h"
 
 
 #define ADC_CH  ADC_CHANNEL_6
@@ -38,6 +41,10 @@ private:
     void ui_task();
     void uart();
     void adc();
+
+    bool spi_init_once();
+    bool sd_mount();
+    void sd_test();
 
     void inc_dropped_logs();
     uint32_t get_dropped_logs();
