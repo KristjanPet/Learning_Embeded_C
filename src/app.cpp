@@ -30,6 +30,8 @@ bool App::start(){
     ctx_.cmdQ = xQueueCreate(10, sizeof(CommandEvent));
     ctx_.uiSet = xQueueCreateSet(20);
 
+    ctx_.sd_buf_len = 0;
+
     if(!ctx_.uiSet){
         ESP_LOGE(TAG, "Failed to create uiSet");
         return false;
@@ -275,6 +277,8 @@ void App::logger_trampoline(void *pv){
 
 void App::logger(){
     LogEvent ev;
+    uint32_t last_flush_ms = (uint32_t)(esp_timer_get_time() / 1000);
+
     while (true){
         if (ctx_.stopRequested) break;
         if(xQueueReceive(ctx_.logQueue, &ev, portMAX_DELAY) != pdTRUE){
@@ -301,8 +305,23 @@ void App::logger(){
                 default:
                     break;
             }  
+
+            char line[96];
+            // keep it compact
+            snprintf(line, sizeof(line),
+                     "type=%d count=%d t=%u",
+                     (int)ev.type, ev.count, (int)ev.timestamp_ms);
+            sd_log_append(line);
+
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (now_ms - last_flush_ms >= 1000) {
+                sd_log_flush();
+                last_flush_ms = now_ms;
+            }
         }
     }
+
+    sd_log_flush();
     ctx_.loggerHandle = nullptr;
     vTaskDelete(NULL);
 }
@@ -810,6 +829,43 @@ void App::sd_test(){
         ESP_LOGI("SD", "%s", line);
     }
     fclose(f);
+}
+
+void App::sd_log_append(const char* line) {
+    size_t n = strlen(line);
+    if (n==0) return;
+
+    if(ctx_.sd_buf_len + n + 1 >= ctx_.SD_BUF_SZ){
+        sd_log_flush();
+    }
+
+    // If a single line is bigger than the whole buffer, skip it
+    if (n + 1 >= ctx_.SD_BUF_SZ) return;
+
+    memcpy(&ctx_.sd_buf[ctx_.sd_buf_len], line, n);
+    ctx_.sd_buf_len += n;
+    ctx_.sd_buf[ctx_.sd_buf_len++] = '\n';
+}
+
+void App::sd_log_flush(){
+
+    if (ctx_.sd_buf_len == 0) return;
+
+    FILE* f = fopen("/sdcard/log.txt", "a");
+    if (!f) {
+        ESP_LOGE("SD", "open write failed");
+        ctx_.sd_buf_len = 0;
+        return;
+    }
+
+    size_t written = fwrite(ctx_.sd_buf, 1, ctx_.sd_buf_len, f);
+    fclose(f);
+
+    if (written != ctx_.sd_buf_len) {
+        ESP_LOGE("SD", "short write: %u/%u", (unsigned)written, (unsigned)ctx_.sd_buf_len);
+    }
+
+    ctx_.sd_buf_len = 0;
 }
 
 void App::producer_timer_cb(TimerHandle_t xTimer){

@@ -46,6 +46,8 @@ private:
     bool sd_mount();
     void sd_test();
     void force_spi_cs_high();
+    void sd_log_append(const char* line);
+    void sd_log_flush();
 
     void inc_dropped_logs();
     uint32_t get_dropped_logs();
