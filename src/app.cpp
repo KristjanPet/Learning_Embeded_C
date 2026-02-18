@@ -40,6 +40,25 @@ bool App::start(){
         return false;
     }
 
+    //Software timer
+    ctx_.producerTimer = xTimerCreate(
+        "prod_tmr",
+        pdMS_TO_TICKS(ctx_.settings.producer_period_ms),
+        pdTRUE, //auto reload
+        this, //timer ID = App*
+        producer_timer_cb
+    );
+
+    if(!ctx_.producerTimer){
+        ESP_LOGE(TAG, "Failed to create producer timer");
+        return false;
+    }
+
+    if(xTimerStart(ctx_.producerTimer, 0) != pdPASS){
+        ESP_LOGE(TAG, "Failed to start producer timer");
+        return false;
+    }
+
     //ADC init
     adc_init();
 
@@ -134,39 +153,39 @@ bool App::start(){
         ESP_LOGE(TAG, "Failed to create uart task"); return false;
     }
 
-    // if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
-    //     ESP_LOGE(TAG, "Failed to create ui task"); return false;
-    // }
+    if (xTaskCreate(&App::ui_trampoline, "ui", 2048, this, 4, &ctx_.uiHandle) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create ui task"); return false;
+    }
 
     if(xTaskCreate(&App::button_trampoline, "Button", 2048, this, 4, &ctx_.buttonHandle) != pdPASS){
         ESP_LOGE(TAG, "Failed to create button task");
         return false;
     }
 
-    // if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create health task");
-    //     return false;
-    // }
-
-    // if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create logger task");
-    //     return false;
-    // }
-
-    // if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create producer task");
-    //     return false;
-    // }
-
-    // if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
-    //     ESP_LOGE(TAG, "Failed to create consumer task");
-    //     return false;
-    // }
-
-    if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
-        ESP_LOGE(TAG, "Failed to create ADC task");
+    if (xTaskCreate(&App::health_trampoline, "health", 2048, this, 2, &ctx_.healthHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create health task");
         return false;
     }
+
+    if (xTaskCreate(&App::logger_trampoline, "logger", 2048, this, 5, &ctx_.loggerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create logger task");
+        return false;
+    }
+
+    if (xTaskCreate(&App::producer_trampoline, "producer", 2048, this, 3, &ctx_.producerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create producer task");
+        return false;
+    }
+
+    if (xTaskCreate(&App::consumer_trampoline, "consumer", 2048, this, 6, &ctx_.consumerHandle) != pdPASS){
+        ESP_LOGE(TAG, "Failed to create consumer task");
+        return false;
+    }
+
+    // if (xTaskCreate(&App::adc_trampoline, "ADC", 3072, this, 4, NULL) != pdPASS){
+    //     ESP_LOGE(TAG, "Failed to create ADC task");
+    //     return false;
+    // }
 
     return true;
 }
@@ -180,13 +199,17 @@ bool App::stop(){
     xQueueSend(ctx_.freeQ, &poison, 0);
     xQueueSend(ctx_.logQueue, &logPoison, 0);
 
+    if(ctx_.producerHandle){
+        xTaskNotifyGive(ctx_.producerHandle);
+    }
+
     const TickType_t start = xTaskGetTickCount();
 
     while ((ctx_.producerHandle || ctx_.consumerHandle || ctx_.healthHandle || ctx_.loggerHandle) && (xTaskGetTickCount() - start < pdMS_TO_TICKS(2000)))
     {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
-        
+       
     if (ctx_.healthHandle) { //still running, force stop
         ESP_LOGE("APP", "Stop timeout: force-deleting health tasks");
         // esp_task_wdt_delete(ctx_.healthHandle);
@@ -204,6 +227,11 @@ bool App::stop(){
         // esp_task_wdt_delete(ctx_.producerHandle);
         vTaskDelete(ctx_.producerHandle);
         ctx_.producerHandle = nullptr;
+        if(ctx_.producerTimer){
+            xTimerStop(ctx_.producerTimer, 0);
+            xTimerDelete(ctx_.producerTimer, 0);
+            ctx_.producerTimer = nullptr;
+        }
     }
     if (ctx_.loggerHandle) {
         ESP_LOGE("APP", "Stop timeout: force-deleting logger tasks");
@@ -329,7 +357,7 @@ void App::health(){
 
         float alt_m = altitude_from_hpa(p_hpa, p0);
 
-        ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
+        // ESP_LOGI("SPL06", "T=%.2f C  P=%.2f hPa Alt=%.1f m (P0=%.2f)", tc, p_hpa, alt_m, p0);
         
         // ESP_LOGI("HEALTH", "dropped_logs= %u, stage=%d", v, ctx_.producer_stage);
 
@@ -358,6 +386,8 @@ void App::producer(){
             // ESP_ERROR_CHECK(esp_task_wdt_reset());
             continue;
         }
+
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY); //waiting for timer ping
 
         if (xQueueReceive(ctx_.freeQ, &p, portMAX_DELAY) != pdTRUE){
             ESP_LOGE("PRODUCER", "Failed to recive freeQ data");
@@ -391,7 +421,7 @@ void App::producer(){
         xSemaphoreGive(ctx_.settingsMutex);
 
         // ESP_ERROR_CHECK(esp_task_wdt_reset());
-        vTaskDelay(pdMS_TO_TICKS(p));
+        // vTaskDelay(pdMS_TO_TICKS(p));
     }
     // esp_task_wdt_delete(NULL);
     ctx_.producerHandle = nullptr;
@@ -691,6 +721,15 @@ void App::adc(){
     adc_task();
 }
 
+void App::producer_timer_cb(TimerHandle_t xTimer){
+    auto *self = static_cast<App*>(pvTimerGetTimerID(xTimer)); //stores this in timer ID
+    if (!self) return;
+
+    if(self->ctx_.producerHandle){
+        xTaskNotifyGive(self->ctx_.producerHandle);
+    }
+}
+
 void App::inc_dropped_logs(){
     portENTER_CRITICAL(&ctx_.dropped_logs_mux);
     ctx_.dropped_logs++;
@@ -725,6 +764,8 @@ void App::handle_toggle_period(uint32_t ms) {
     xSemaphoreTake(ctx_.settingsMutex, portMAX_DELAY);
     ctx_.settings.producer_period_ms = ms;
     xSemaphoreGive(ctx_.settingsMutex);
+
+    xTimerChangePeriod(ctx_.producerTimer, pdMS_TO_TICKS(ms), 0);
 
     LogEvent le{LogType::CHANGED, (int)ms, (uint32_t)(esp_timer_get_time() / 1000)};
     if(xQueueSend(ctx_.logQueue, &le, 0) != pdTRUE){
