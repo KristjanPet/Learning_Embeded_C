@@ -278,7 +278,7 @@ void App::logger_trampoline(void *pv){
 void App::logger(){
     LogEvent ev;
     uint32_t last_flush_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
+    static constexpr size_t flushWatermark = ctx_.SD_BUF_SZ - 256;
     while (true){
         if (ctx_.stopRequested) break;
         if(xQueueReceive(ctx_.logQueue, &ev, portMAX_DELAY) != pdTRUE){
@@ -314,7 +314,7 @@ void App::logger(){
             sd_log_append(line);
 
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            if (now_ms - last_flush_ms >= 1000) {
+            if (ctx_.sd_buf_len >= flushWatermark || (now_ms - last_flush_ms) >= 2000) {
                 sd_log_flush();
                 last_flush_ms = now_ms;
             }
@@ -859,6 +859,9 @@ void App::sd_log_flush(){
     }
 
     size_t written = fwrite(ctx_.sd_buf, 1, ctx_.sd_buf_len, f);
+
+    int fd = fileno(f);
+    if (fd >= 0) fsync(fd);
     fclose(f);
 
     if (written != ctx_.sd_buf_len) {
