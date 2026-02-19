@@ -2,6 +2,7 @@
 #include "i2c_helper.h"
 #include "spi_helper.h"
 #include "ADC_helper.h"
+#include "command_parser.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -655,48 +656,17 @@ void App::uart(){
             char* line = trim(buf);
             len = 0;
 
-            if(!strcmp(line, "status")){
-                ev.type = CommandType::Status;
-            }
-            else if(starts_with(line, "period ")){
-                char* end = nullptr;
-                unsigned long v = strtoul(line + 7, &end, 10);
-
-                // valid only if we consumed at least 1 digit and ended at string end
-                if (end == (line + 7) || *end != '\0') {
-                    ok = false;
-                } else {
-                    ev.type = CommandType::SetPeriod;
-                    ev.value = (uint32_t)v;
+            if (parse_command_line(line, &ev)) {
+                if (xQueueSend(ctx_.cmdQ, &ev, pdMS_TO_TICKS(50)) != pdTRUE) {
+                    ESP_LOGW("UART", "cmdQ full, drop");
                 }
             }
-            else if(!strcmp(line, "pause toggle")){
-                ev.type = CommandType::PauseToggle;
-            }
-            else if(!strcmp(line, "pause on")){
-                ev.type = CommandType::PauseOn;
-            }
-            else if(!strcmp(line, "pause off")){
-                ev.type = CommandType::PauseOff;
-            } 
             else if(!strcmp(line, "help")){
                 ESP_LOGI("UART", "Commands:");
                 ESP_LOGI("UART", "  status");
                 ESP_LOGI("UART", "  period <50..10000>");
                 ESP_LOGI("UART", "  pause on|off|toggle");
                 continue; // don’t send to cmdQ
-            }
-            else{
-                ok = false;
-            }
-
-            if(ok){
-                if(xQueueSend(ctx_.cmdQ, &ev, pdMS_TO_TICKS(50)) != pdTRUE){
-                    ESP_LOGW("UART", "cmdQ full, drop");
-                }
-            }
-            else{
-                ESP_LOGW("UART", "Unknown command '%s'", line);
             }
 
 
