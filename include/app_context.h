@@ -46,4 +46,9 @@ struct AppContext{
     //Mutex
     SemaphoreHandle_t settingsMutex;
     Settings settings;
+
+    //DMA SD
+    static constexpr size_t SD_BUF_SZ = 2048;
+    char sd_buf[SD_BUF_SZ];
+    size_t sd_buf_len;
 };

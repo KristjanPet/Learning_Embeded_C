@@ -30,6 +30,8 @@ bool App::start(){
     ctx_.cmdQ = xQueueCreate(10, sizeof(CommandEvent));
     ctx_.uiSet = xQueueCreateSet(20);
 
+    ctx_.sd_buf_len = 0;
+
     if(!ctx_.uiSet){
         ESP_LOGE(TAG, "Failed to create uiSet");
         return false;
@@ -105,7 +107,13 @@ bool App::start(){
     ESP_LOGI("OLED", "init+clear OK");
 
     //init SPI
+    if(!spi_init_once()) return false;
+    force_spi_cs_high();
+
     ESP_ERROR_CHECK(spl06_spi_init());
+
+    if(!sd_mount()) return false;
+    sd_test();
 
     uint8_t id = 0;
     ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
@@ -269,6 +277,8 @@ void App::logger_trampoline(void *pv){
 
 void App::logger(){
     LogEvent ev;
+    uint32_t last_flush_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    static constexpr size_t flushWatermark = ctx_.SD_BUF_SZ - 256;
     while (true){
         if (ctx_.stopRequested) break;
         if(xQueueReceive(ctx_.logQueue, &ev, portMAX_DELAY) != pdTRUE){
@@ -295,8 +305,23 @@ void App::logger(){
                 default:
                     break;
             }  
+
+            char line[96];
+            // keep it compact
+            snprintf(line, sizeof(line),
+                     "type=%d count=%d t=%u",
+                     (int)ev.type, ev.count, (int)ev.timestamp_ms);
+            sd_log_append(line);
+
+            uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+            if (ctx_.sd_buf_len >= flushWatermark || (now_ms - last_flush_ms) >= 2000) {
+                sd_log_flush();
+                last_flush_ms = now_ms;
+            }
         }
     }
+
+    sd_log_flush();
     ctx_.loggerHandle = nullptr;
     vTaskDelete(NULL);
 }
@@ -719,6 +744,131 @@ void App::adc_trampoline(void* pv){
 
 void App::adc(){
     adc_task();
+}
+
+bool App::spi_init_once()
+{
+    spi_bus_config_t buscfg = {};
+    buscfg.mosi_io_num = GPIO_NUM_23;
+    buscfg.miso_io_num = GPIO_NUM_19;
+    buscfg.sclk_io_num = GPIO_NUM_18;
+    buscfg.quadwp_io_num = -1;
+    buscfg.quadhd_io_num = -1;
+
+    esp_err_t err = spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO);
+
+    // If already initialized, allow it.
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE("SPI", "spi_bus_initialize failed: %s", esp_err_to_name(err));
+        return false;
+    }
+    return true;
+}
+
+void App::force_spi_cs_high()
+{
+    gpio_config_t cfg{};
+    cfg.mode = GPIO_MODE_OUTPUT;
+    cfg.pin_bit_mask = (1ULL << GPIO_NUM_5) | (1ULL << GPIO_NUM_17); // SPL06_CS + SD_CS
+    cfg.pull_up_en = GPIO_PULLUP_ENABLE;
+    ESP_ERROR_CHECK(gpio_config(&cfg));
+
+    gpio_set_level(GPIO_NUM_5, 1);   // SPL06 deselect
+    gpio_set_level(GPIO_NUM_17, 1);  // SD deselect
+}
+
+bool App::sd_mount(){
+
+    esp_vfs_fat_sdmmc_mount_config_t mount_cfg = {
+        .format_if_mount_failed = false,
+        .max_files = 5,
+        .allocation_unit_size = 16 * 1024
+    };
+
+    sdmmc_card_t* card = nullptr;
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SPI3_HOST;
+    host.max_freq_khz = 1000;
+
+    sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_cfg.host_id = SPI3_HOST;
+    slot_cfg.gpio_cs = GPIO_NUM_17;   // SD CS
+
+    esp_err_t ret = esp_vfs_fat_sdspi_mount("/sdcard", &host, &slot_cfg, &mount_cfg, &card);
+    if (ret != ESP_OK) {
+        ESP_LOGE("SD", "mount failed: %s", esp_err_to_name(ret));
+        return false;
+    }
+
+    sdmmc_card_print_info(stdout, card);
+    return true;
+}
+
+void App::sd_test(){
+
+    FILE* f = fopen("/sdcard/log.txt", "a");
+    if(!f){
+        ESP_LOGE("SD", "open write failed");
+        return;
+    }
+
+    fprintf(f, "Hello from ESP32 (SPI SD)\n");
+    fclose(f);
+
+    f = fopen("/sdcard/log.txt", "r");
+    if(!f){
+        ESP_LOGE("SD", "open read failed");
+        return;
+    }
+
+    char line[128];
+    ESP_LOGI("SD", "---------- log.txt -------------");
+    while(fgets(line, sizeof(line), f)){
+        line[strcspn(line, "\r\n")] = 0;
+        ESP_LOGI("SD", "%s", line);
+    }
+    fclose(f);
+}
+
+void App::sd_log_append(const char* line) {
+    size_t n = strlen(line);
+    if (n==0) return;
+
+    if(ctx_.sd_buf_len + n + 1 >= ctx_.SD_BUF_SZ){
+        sd_log_flush();
+    }
+
+    // If a single line is bigger than the whole buffer, skip it
+    if (n + 1 >= ctx_.SD_BUF_SZ) return;
+
+    memcpy(&ctx_.sd_buf[ctx_.sd_buf_len], line, n);
+    ctx_.sd_buf_len += n;
+    ctx_.sd_buf[ctx_.sd_buf_len++] = '\n';
+}
+
+void App::sd_log_flush(){
+
+    if (ctx_.sd_buf_len == 0) return;
+
+    FILE* f = fopen("/sdcard/log.txt", "a");
+    if (!f) {
+        ESP_LOGE("SD", "open write failed");
+        ctx_.sd_buf_len = 0;
+        return;
+    }
+
+    size_t written = fwrite(ctx_.sd_buf, 1, ctx_.sd_buf_len, f);
+
+    int fd = fileno(f);
+    if (fd >= 0) fsync(fd);
+    fclose(f);
+
+    if (written != ctx_.sd_buf_len) {
+        ESP_LOGE("SD", "short write: %u/%u", (unsigned)written, (unsigned)ctx_.sd_buf_len);
+    }
+
+    ctx_.sd_buf_len = 0;
 }
 
 void App::producer_timer_cb(TimerHandle_t xTimer){
