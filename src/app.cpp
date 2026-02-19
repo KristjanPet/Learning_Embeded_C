@@ -114,7 +114,7 @@ bool App::start(){
     ESP_ERROR_CHECK(spl06_spi_init());
 
     if(!sd_mount()) return false;
-    sd_test();
+    // sd_test();
 
     uint8_t id = 0;
     ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
