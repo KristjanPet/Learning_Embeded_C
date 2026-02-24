@@ -32,6 +32,9 @@ bool App::start(){
     ctx_.uiSet = xQueueCreateSet(20);
 
     ctx_.sd_buf_len = 0;
+    ctx_.sd_policy.flush_period_ms = 2000;
+    ctx_.sd_policy.watermark_bytes = ctx_.SD_BUF_SZ - 256;
+    ctx_.sd_state.last_flush_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     if(!ctx_.uiSet){
         ESP_LOGE(TAG, "Failed to create uiSet");
@@ -315,9 +318,9 @@ void App::logger(){
             sd_log_append(line);
 
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            if (ctx_.sd_buf_len >= flushWatermark || (now_ms - last_flush_ms) >= 2000) {
+            if (should_flush(ctx_.sd_policy, ctx_.sd_state, ctx_.sd_buf_len, now_ms)) {
                 sd_log_flush();
-                last_flush_ms = now_ms;
+                ctx_.sd_state.last_flush_ms = now_ms;
             }
         }
     }
