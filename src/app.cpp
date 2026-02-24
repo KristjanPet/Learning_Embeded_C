@@ -2,6 +2,7 @@
 #include "i2c_helper.h"
 #include "spi_helper.h"
 #include "ADC_helper.h"
+#include "command_parser.h"
 
 static void IRAM_ATTR gpio_isr_handler(void* arg) {
     auto* self = static_cast<App*>(arg);
@@ -31,6 +32,9 @@ bool App::start(){
     ctx_.uiSet = xQueueCreateSet(20);
 
     ctx_.sd_buf_len = 0;
+    ctx_.sd_policy.flush_period_ms = 2000;
+    ctx_.sd_policy.watermark_bytes = ctx_.SD_BUF_SZ - 256;
+    ctx_.sd_state.last_flush_ms = (uint32_t)(esp_timer_get_time() / 1000);
 
     if(!ctx_.uiSet){
         ESP_LOGE(TAG, "Failed to create uiSet");
@@ -113,7 +117,7 @@ bool App::start(){
     ESP_ERROR_CHECK(spl06_spi_init());
 
     if(!sd_mount()) return false;
-    sd_test();
+    // sd_test();
 
     uint8_t id = 0;
     ESP_ERROR_CHECK(spl06_read_reg(0x0D, &id));
@@ -314,9 +318,9 @@ void App::logger(){
             sd_log_append(line);
 
             uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-            if (ctx_.sd_buf_len >= flushWatermark || (now_ms - last_flush_ms) >= 2000) {
+            if (should_flush(ctx_.sd_policy, ctx_.sd_state, ctx_.sd_buf_len, now_ms)) {
                 sd_log_flush();
-                last_flush_ms = now_ms;
+                ctx_.sd_state.last_flush_ms = now_ms;
             }
         }
     }
@@ -655,48 +659,17 @@ void App::uart(){
             char* line = trim(buf);
             len = 0;
 
-            if(!strcmp(line, "status")){
-                ev.type = CommandType::Status;
-            }
-            else if(starts_with(line, "period ")){
-                char* end = nullptr;
-                unsigned long v = strtoul(line + 7, &end, 10);
-
-                // valid only if we consumed at least 1 digit and ended at string end
-                if (end == (line + 7) || *end != '\0') {
-                    ok = false;
-                } else {
-                    ev.type = CommandType::SetPeriod;
-                    ev.value = (uint32_t)v;
+            if (parse_command_line(line, &ev)) {
+                if (xQueueSend(ctx_.cmdQ, &ev, pdMS_TO_TICKS(50)) != pdTRUE) {
+                    ESP_LOGW("UART", "cmdQ full, drop");
                 }
             }
-            else if(!strcmp(line, "pause toggle")){
-                ev.type = CommandType::PauseToggle;
-            }
-            else if(!strcmp(line, "pause on")){
-                ev.type = CommandType::PauseOn;
-            }
-            else if(!strcmp(line, "pause off")){
-                ev.type = CommandType::PauseOff;
-            } 
             else if(!strcmp(line, "help")){
                 ESP_LOGI("UART", "Commands:");
                 ESP_LOGI("UART", "  status");
                 ESP_LOGI("UART", "  period <50..10000>");
                 ESP_LOGI("UART", "  pause on|off|toggle");
                 continue; // don’t send to cmdQ
-            }
-            else{
-                ok = false;
-            }
-
-            if(ok){
-                if(xQueueSend(ctx_.cmdQ, &ev, pdMS_TO_TICKS(50)) != pdTRUE){
-                    ESP_LOGW("UART", "cmdQ full, drop");
-                }
-            }
-            else{
-                ESP_LOGW("UART", "Unknown command '%s'", line);
             }
 
 
